@@ -191,7 +191,7 @@ void CmdJob(string[] a)
 {
     if (a.Length < 2)
     {
-        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here");
+        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here | job push");
         return;
     }
 
@@ -236,8 +236,17 @@ void CmdJob(string[] a)
             if (role == Role.Dispatcher) SendBeacon();
             break;
 
+        case "push":
+            // How a base-mounted dispatcher gets a frame it cannot anchor itself.
+            if (role != Role.Miner) { Log("Only a miner can push a job"); return; }
+            if (!job.IsSet) { Log("Nothing to push — set a job here first"); return; }
+            if (dispatcherAddr == 0) { Log("No dispatcher on channel '" + igcChannel + "'"); return; }
+            SendJobPush();
+            Log("Job pushed to the dispatcher");
+            break;
+
         default:
-            Log("job set | here | size | depth");
+            Log("job set | here | size | depth | push");
             break;
     }
 }
