@@ -49,10 +49,26 @@ scattered deposit that is the difference between 100 holes and 30.
 **Knows when to stop digging.** The drills are the ore sensor. When a shaft stops
 producing, there is nothing below worth the fuel.
 
+**Follows the ore off the edge of the job.** If the survey says a boundary of
+your grid is still producing when the work runs out, the boundary was a guess and
+the deposit carries on. It extends the grid that way and keeps going, so the
+shape of the site ends up matching the shape of the ore rather than the rectangle
+you typed.
+
+**Measures itself instead of trusting a number somebody typed.** Cutting speed
+and braking margin are both properties of *your* hull on *your* server, so the
+ship works them out by watching what happens: back off when the drills stall,
+creep up when they are cutting cleanly, and tighten the braking profile if
+approaches keep spending more authority than they should. Both figures are on the
+screen and both can be pinned in config if you would rather they did not move.
+
 **Scales to a fleet without a rewrite.** Put a second Programmable Block at your
 base, set `role = Dispatcher`, and every miner on the channel joins
 automatically. Shaft assignments are timed leases, so a drone that explodes
-mid-shaft costs you one lease, not the job.
+mid-shaft costs you one lease, not the job. One drone at a time manoeuvres in the
+airspace over the deposit, granted by the dispatcher with a queue behind it —
+and unlike the script that idea comes from, the airspace expires too, so a drone
+that dies holding it does not deadlock the site.
 
 **Does not hang.** Every state has a watchdog. Stuck in a shaft, hung on a dock
 approach, waiting on a dispatcher that stopped answering — all of them recover on
@@ -101,6 +117,8 @@ Run these as the Programmable Block's argument.
 | `order serpentine\|spiral\|prospect` | Shaft ordering |
 | `eject off\|stone\|stoneandice` | What to throw overboard |
 | `fleet <command>` | Relay a command to every drone on the channel |
+| `purge` | Release every airspace lock. The 2am escape hatch |
+| `learn` / `learn reset` | Show what the ship has measured about itself, or forget it |
 | `reload` | Re-read Custom Data and rescan blocks |
 
 ---
@@ -129,7 +147,7 @@ python3 tools/minify.py      # -> dist/VEIN.min.cs   (paste this one)
 
 | Artefact | Use |
 |---|---|
-| `dist/VEIN.min.cs` | **Paste into the Programmable Block.** ~89k chars. |
+| `dist/VEIN.min.cs` | **Paste into the Programmable Block.** ~98k chars. |
 | `dist/VEIN.cs` | Same code, fully commented. Too large for the in-game editor. |
 | `dist/VEIN.mdk.cs` | Wrapped for MDK2 / Visual Studio, for IntelliSense and real whitelist checking. |
 
@@ -137,6 +155,17 @@ python3 tools/minify.py      # -> dist/VEIN.min.cs   (paste this one)
 without the game's assemblies. It catches unbalanced braces, duplicate members,
 calls to methods that do not exist, and use of API the Programmable Block sandbox
 blocks — which is most of the ways a modular script actually breaks.
+
+`tools/minify.py` strips comments, then squeezes every space and line break that
+is not holding two tokens apart, then shortens the fewest identifiers that get
+the result under the editor limit — so the names in an in-game stack trace are
+mostly still real. It verifies its own output before writing: literals unchanged,
+brackets balanced, and no renamed identifier still appearing in the result. That
+last check matters, because a field of a helper class is declared bare and used
+qualified, and a renamer that cannot see `job.Width` will happily rename the
+declaration alone and hand you a script that compiles into a different program.
+Anything reached through a dot is therefore off limits. `--aggressive` renames
+everything it is allowed to, for when you need the headroom.
 
 ---
 

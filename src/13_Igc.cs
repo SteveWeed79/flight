@@ -61,9 +61,9 @@ void HandleMessage(long src, string body)
         case "DG": OnDockGrant(src, f); break;
         case "DX": OnDockRelease(src, f); break;
         case "OS": OnOreSighting(src, f); break;
-        case "KA": if (role == Role.Dispatcher && f.Length > 1) OnLockRequest(src, f[1]); break;
-        case "KG": if (role == Role.Miner && f.Length > 1) OnLockGranted(f[1]); break;
-        case "KR": if (role == Role.Dispatcher && f.Length > 1) OnLockRelease(src, f[1]); break;
+        case "KA": OnLockAsk(src, f); break;
+        case "KG": OnLockGrant(src, f); break;
+        case "KR": OnLockRelease(src, f); break;
         case "C":  if (f.Length > 1) HandleCommand(f[1], false); break;
     }
 }
@@ -233,16 +233,9 @@ void OnHeartbeat(long src, string[] f)
 {
     if (role != Role.Dispatcher || f.Length < 7) return;
 
-    DroneRecord r;
-    if (!fleet.TryGetValue(src, out r))
-    {
-        r = new DroneRecord();
-        r.Address = src;
-        // Stack new arrivals into their own altitude band.
-        r.Lane = fleet.Count * laneSpacing;
-        fleet[src] = r;
-        Log("Drone joined: " + f[1]);
-    }
+    bool known = fleet.ContainsKey(src);
+    DroneRecord r = DroneFor(src);
+    if (!known) Log("Drone joined: " + f[1]);
 
     r.Name = f[1];
     r.State = (MinerState)ParseInt(f[2], 0);
@@ -261,16 +254,8 @@ void OnLeaseRequest(long src, string[] f)
     // the air finish what they hold and then find no more work waiting.
     if (!jobRunning || jobComplete) { DenyLease(src, "paused"); return; }
 
-    DroneRecord r;
-    if (!fleet.TryGetValue(src, out r))
-    {
-        r = new DroneRecord();
-        r.Address = src;
-        r.Name = f.Length > 1 ? f[1] : "?";
-        r.Lane = fleet.Count * laneSpacing;
-        fleet[src] = r;
-    }
-    r.LastSeenTick = tick;
+    DroneRecord r = DroneFor(src);
+    if (f.Length > 1 && r.Name == "?") r.Name = f[1];
 
     // Score the site from where this drone actually is, so the nearest free
     // shaft goes to the nearest drone instead of to whoever spoke first.

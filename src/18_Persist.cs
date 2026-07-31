@@ -23,6 +23,14 @@ string SerializeState()
      .Append('|').Append(probePassDone ? 1 : 0)
      .Append('\n');
 
+    // What the ship has measured about itself. These are properties of the hull
+    // and the server, not of the job, so they are worth more than the survey and
+    // cost six bytes: rediscovering them means another hour of digging slowly.
+    b.Append("A|").Append(EncD(learnedDrillSpeed))
+     .Append('|').Append(EncD(brakeDerate))
+     .Append('|').Append(brakeSamples)
+     .Append('\n');
+
     if (job.IsSet)
     {
         b.Append("J|").Append(job.Width)
@@ -65,12 +73,6 @@ string SerializeState()
          .Append('|').Append(EncD(w.Lift))
          .Append('\n');
     }
-
-    b.Append("A|").Append(EncD(learnedDrillSpeed))
-     .Append('|').Append(EncD(learnedBrakeDerate))
-     .Append('|').Append(drillStalls)
-     .Append('|').Append(brakeOvershoots)
-     .Append('\n');
 
     if (homeDockSet && homeDock != null)
     {
@@ -117,6 +119,11 @@ void LoadState()
                     LoadLifecycle(f);
                     break;
 
+                case "A":
+                    if (!versionOk || f.Length < 4) break;
+                    LoadLearned(f);
+                    break;
+
                 case "J":
                     if (!versionOk || f.Length < 9) break;
                     LoadJob(f);
@@ -130,14 +137,6 @@ void LoadState()
                 case "P":
                     if (!versionOk || f.Length < 4) break;
                     path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), new float[0], (float)DecD(f[3])));
-                    break;
-
-                case "A":
-                    if (!versionOk || f.Length < 5) break;
-                    learnedDrillSpeed = DecD(f[1]);
-                    learnedBrakeDerate = DecD(f[2]);
-                    drillStalls = ParseInt(f[3], 0);
-                    brakeOvershoots = ParseInt(f[4], 0);
                     break;
 
                 case "D":
@@ -182,6 +181,19 @@ void LoadLifecycle(string[] f)
 
     if (saved != MinerState.Idle && saved != MinerState.Fault)
         Log("Resumed from " + saved + " — idling, run 'start' to continue");
+}
+
+void LoadLearned(string[] f)
+{
+    double cut = DecD(f[1]);
+    double derate = DecD(f[2]);
+
+    // Clamped against the *current* config, not the one that produced them. An
+    // operator who has since halved drillSpeed has said something about this
+    // ship, and a value learned under the old setting must not override it.
+    if (cut > 0) learnedDrillSpeed = Clamp(cut, DrillSpeedFloor, DrillSpeedCap);
+    if (derate > 0) brakeDerate = Clamp(derate, 0.30, 0.85);
+    brakeSamples = Math.Max(0, ParseInt(f[3], 0));
 }
 
 void LoadJob(string[] f)
