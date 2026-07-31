@@ -457,6 +457,9 @@ namespace VEIN
         /// <summary>Seconds a drone waits for the airspace before going anyway. A
         /// dispatcher that stops answering must not be able to park the fleet.</summary>
         double lockPatience = 60.0;
+        /// <summary>Seconds a loaded drone holds off the dock waiting for a free slot
+        /// before docking anyway. Same escape valve as <see cref="lockPatience"/>.</summary>
+        double dockPatience = 90.0;
 
         // ---- Display --------------------------------------------------------------
         /// <summary>LCDs whose name contains this get VEIN output.</summary>
@@ -538,6 +541,7 @@ namespace VEIN
             dockSlots     = (int)Clamp(ini.Get(S_FLEET, "dockSlots").ToInt32(1), 1, 32);
             airspaceLock  = ini.Get(S_FLEET, "airspaceLock").ToBoolean(true);
             lockPatience  = Clamp(ini.Get(S_FLEET, "lockPatience").ToDouble(60.0), 5.0, 600.0);
+            dockPatience  = Clamp(ini.Get(S_FLEET, "dockPatience").ToDouble(90.0), 5.0, 600.0);
 
             lcdTag        = ini.Get(S_DISP, "lcdTag").ToString("[VEIN]");
             verboseEcho   = ini.Get(S_DISP, "verboseEcho").ToBoolean(true);
@@ -552,6 +556,11 @@ namespace VEIN
             // fight: the watchdog resets the state, the ship waits again, and it never
             // gets out of the hole. The wait must always lose.
             if (stateTimeout > 0) lockPatience = Math.Min(lockPatience, stateTimeout * 0.5);
+
+            // The same fight, in Inbound: a drone holding off the dock is sitting in a
+            // state the watchdog is timing, and it arrives there loaded and burning
+            // hydrogen. This wait must lose too.
+            if (stateTimeout > 0) dockPatience = Math.Min(dockPatience, stateTimeout * 0.5);
 
             // Seed the learned values, but only if nothing has been learned yet — a
             // reload to change an unrelated key must not throw away an hour of the ship
@@ -632,10 +641,13 @@ namespace VEIN
             ini.Set(S_FLEET, "laneSpacing", laneSpacing);
             ini.SetComment(S_FLEET, "laneSpacing", "Metres between drone altitude lanes over the site. Must exceed\nthe largest drone's height by a comfortable margin. Formation only —\nexclusion is airspaceLock's job.");
             ini.Set(S_FLEET, "dockSlots", dockSlots);
+            ini.SetComment(S_FLEET, "dockSlots", "Dispatcher only: how many connectors drones may unload at. A drone\nthat arrives when they are all taken holds off the dock until one\nfrees up, or until dockPatience runs out.");
             ini.Set(S_FLEET, "airspaceLock", airspaceLock);
             ini.SetComment(S_FLEET, "airspaceLock", "One drone at a time in the airspace over the site, granted by the\ndispatcher with a queue behind it. This is what actually stops two\ndrones wanting the same hole. Ignored by a solo miner.");
             ini.Set(S_FLEET, "lockPatience", lockPatience);
             ini.SetComment(S_FLEET, "lockPatience", "Seconds a drone waits for the airspace before proceeding anyway.");
+            ini.Set(S_FLEET, "dockPatience", dockPatience);
+            ini.SetComment(S_FLEET, "dockPatience", "Seconds a loaded drone holds off the dock waiting for a free slot\nbefore docking anyway. Capped at half stateTimeout, so the wait can\nnever outlast the watchdog that is timing it.");
 
             ini.Set(S_DISP, "lcdTag", lcdTag);
             ini.Set(S_DISP, "verboseEcho", verboseEcho);
@@ -3661,10 +3673,25 @@ namespace VEIN
                 // which the lanes exist to separate. Holding the site lock all the way
                 // home would serialise the whole fleet for no benefit.
                 ReleaseAirspace();
+                ResetDockWait();
                 if (HasDispatcher) RequestDock();
             }
 
-            if (FollowPath(false)) SetState(MinerState.Docking);
+            if (!FollowPath(false)) return;
+
+            // End of the route, but the connector may still be somebody else's. Hold
+            // off rather than crowding the pad — squared up on the mating axis, so the
+            // approach starts from the right attitude the moment the slot arrives.
+            if (!AcquireDockSlot())
+            {
+                statusLine = "Waiting for a dock slot";
+                if (dockHoldPoint == Vector3D.Zero) dockHoldPoint = shipPos;
+                FlyTo(dockHoldPoint, dockSpeed);
+                if (homeDockSet) Orient(-homeDockForward, homeDockUp);
+                return;
+            }
+
+            SetState(MinerState.Docking);
         }
 
         // ---------------------------------------------------------------------------
@@ -6503,6 +6530,75 @@ namespace VEIN
                 lockAskTick = tick;
             }
             return false;
+        }
+
+        // ---- Dock slots -----------------------------------------------------------
+        //
+        //  The fourth mechanism, and until now the only one that was not actually
+        //  enforced. The dispatcher allocated slot numbers, answered -1 when they were
+        //  all taken, and expired them when a drone went quiet — but nothing on the
+        //  drone ever waited for the answer. A drone told to hold off flew the mating
+        //  run anyway, which is precisely the collision the slot exists to prevent.
+        //
+        //  No queue here, unlike the lock. The dispatcher re-grants a slot the asker
+        //  already holds and otherwise answers -1, so a drone simply asks again.
+
+        /// <summary>Tick we started waiting for a slot. Zero when not waiting.</summary>
+        long dockWaitTick;
+        /// <summary>Tick of our last ask, for re-ask backoff.</summary>
+        long dockAskTick;
+        /// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
+        bool dockOverridden;
+        /// <summary>Where we parked while waiting. Captured once, so the ship holds a
+        /// fixed point instead of drifting on whatever it was doing when it stopped.</summary>
+        Vector3D dockHoldPoint;
+
+        /// <summary>
+        /// May we start the mating run?
+        ///
+        /// True immediately for a solo miner — the connector is nobody else's — and
+        /// true once the dispatcher has granted a slot. Otherwise it re-asks
+        /// periodically and returns false so the caller can hold station.
+        ///
+        /// Bounded like the airspace lock, and for a sharper version of the same
+        /// reason: a dispatcher that has stopped answering must not be able to hold a
+        /// fleet of loaded ships in the air outside their own base, burning the
+        /// hydrogen they need to land.
+        /// </summary>
+        bool AcquireDockSlot()
+        {
+            if (!HasDispatcher) return true;
+            if (myDockSlot >= 0) return true;
+
+            if (dockWaitTick == 0) dockWaitTick = tick;
+
+            if (tick - dockWaitTick > (long)(dockPatience / Math.Max(dt, 0.01)))
+            {
+                if (!dockOverridden)
+                {
+                    dockOverridden = true;
+                    Log("No dock slot granted — docking anyway");
+                }
+                return true;
+            }
+
+            // Re-ask, because a request dropped by the per-tick message cap must not
+            // strand a loaded ship short of its own connector.
+            if (dockAskTick == 0 || tick - dockAskTick > 60)
+            {
+                RequestDock();
+                dockAskTick = tick;
+            }
+            return false;
+        }
+
+        /// <summary>Forget any slot wait. Called when a return leg begins.</summary>
+        void ResetDockWait()
+        {
+            dockWaitTick = 0;
+            dockAskTick = 0;
+            dockOverridden = false;
+            dockHoldPoint = Vector3D.Zero;
         }
 
         /// <summary>Give the section back. Safe to call when we hold nothing.</summary>

@@ -501,10 +501,25 @@ void StInbound(bool entry)
         // which the lanes exist to separate. Holding the site lock all the way
         // home would serialise the whole fleet for no benefit.
         ReleaseAirspace();
+        ResetDockWait();
         if (HasDispatcher) RequestDock();
     }
 
-    if (FollowPath(false)) SetState(MinerState.Docking);
+    if (!FollowPath(false)) return;
+
+    // End of the route, but the connector may still be somebody else's. Hold
+    // off rather than crowding the pad — squared up on the mating axis, so the
+    // approach starts from the right attitude the moment the slot arrives.
+    if (!AcquireDockSlot())
+    {
+        statusLine = "Waiting for a dock slot";
+        if (dockHoldPoint == Vector3D.Zero) dockHoldPoint = shipPos;
+        FlyTo(dockHoldPoint, dockSpeed);
+        if (homeDockSet) Orient(-homeDockForward, homeDockUp);
+        return;
+    }
+
+    SetState(MinerState.Docking);
 }
 
 // ---------------------------------------------------------------------------

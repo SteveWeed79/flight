@@ -97,6 +97,75 @@ bool AcquireAirspace(string section)
     return false;
 }
 
+// ---- Dock slots -----------------------------------------------------------
+//
+//  The fourth mechanism, and until now the only one that was not actually
+//  enforced. The dispatcher allocated slot numbers, answered -1 when they were
+//  all taken, and expired them when a drone went quiet — but nothing on the
+//  drone ever waited for the answer. A drone told to hold off flew the mating
+//  run anyway, which is precisely the collision the slot exists to prevent.
+//
+//  No queue here, unlike the lock. The dispatcher re-grants a slot the asker
+//  already holds and otherwise answers -1, so a drone simply asks again.
+
+/// <summary>Tick we started waiting for a slot. Zero when not waiting.</summary>
+long dockWaitTick;
+/// <summary>Tick of our last ask, for re-ask backoff.</summary>
+long dockAskTick;
+/// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
+bool dockOverridden;
+/// <summary>Where we parked while waiting. Captured once, so the ship holds a
+/// fixed point instead of drifting on whatever it was doing when it stopped.</summary>
+Vector3D dockHoldPoint;
+
+/// <summary>
+/// May we start the mating run?
+///
+/// True immediately for a solo miner — the connector is nobody else's — and
+/// true once the dispatcher has granted a slot. Otherwise it re-asks
+/// periodically and returns false so the caller can hold station.
+///
+/// Bounded like the airspace lock, and for a sharper version of the same
+/// reason: a dispatcher that has stopped answering must not be able to hold a
+/// fleet of loaded ships in the air outside their own base, burning the
+/// hydrogen they need to land.
+/// </summary>
+bool AcquireDockSlot()
+{
+    if (!HasDispatcher) return true;
+    if (myDockSlot >= 0) return true;
+
+    if (dockWaitTick == 0) dockWaitTick = tick;
+
+    if (tick - dockWaitTick > (long)(dockPatience / Math.Max(dt, 0.01)))
+    {
+        if (!dockOverridden)
+        {
+            dockOverridden = true;
+            Log("No dock slot granted — docking anyway");
+        }
+        return true;
+    }
+
+    // Re-ask, because a request dropped by the per-tick message cap must not
+    // strand a loaded ship short of its own connector.
+    if (dockAskTick == 0 || tick - dockAskTick > 60)
+    {
+        RequestDock();
+        dockAskTick = tick;
+    }
+    return false;
+}
+
+/// <summary>Forget any slot wait. Called when a return leg begins.</summary>
+void ResetDockWait()
+{
+    dockWaitTick = 0;
+    dockAskTick = 0;
+    dockOverridden = false;
+    dockHoldPoint = Vector3D.Zero;
+}
+
 /// <summary>Give the section back. Safe to call when we hold nothing.</summary>
 void ReleaseAirspace()
 {

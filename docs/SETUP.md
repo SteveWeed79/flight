@@ -129,7 +129,9 @@ Optional. A single miner works fine forever.
 
 1. Put a Programmable Block at your base with the same script.
 2. In its Custom Data set `role = Dispatcher`, and `dockSlots` to the number of
-   connectors miners can unload at.
+   connectors miners can unload at. Drones that arrive when the connectors are
+   all busy hold station off the pad until one frees up, so this needs to match
+   reality — set it to the number of pads you actually have.
 3. Run `reload` on it.
 4. Give it a job. A dispatcher at a base cannot anchor one itself — `job set`
    reads the local remote control's attitude and the local drill face, and a base
