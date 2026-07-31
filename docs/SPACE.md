@@ -3,6 +3,13 @@
 VEIN tuned strictly for asteroid mining. Everything here assumes zero gravity —
 no planets, no atmosphere, no lift limit.
 
+> **Moons are not space. Do not use this preset on one.**
+> Space Engineers moons pull **0.25 g** — 2.45 m/s², a quarter of Earth. A 100 t
+> loaded miner needs about 245 kN just to hover. This preset sets
+> `liftSafetyFactor=1.0`, which in real zero-g is correct and on a moon means a
+> ship loaded to exactly 1:1 thrust-to-weight: able to hover and nothing else.
+> One damaged thruster and it goes down. Use the moon profile below.
+
 ## Paste this into Custom Data
 
 ```ini
@@ -129,6 +136,64 @@ material, i.e. where the real surface is. Everything measures from there:
 
 Resuming a half-dug shaft needs no special handling: the already-cut section
 returns no material, so contact is simply found again at the old bottom.
+
+## Moons: the third profile
+
+Moons sit between the two, and it is worth being precise about which half is
+space-like and which is not.
+
+**Space-like:** the Moon and Europa are airless. Atmospheric thrusters produce
+nothing, so it is ion and hydrogen only, exactly as in space. Speeds can be high,
+there is no air resistance, and terrain is rugged but no worse than an asteroid
+face. (Titan is the exception — it has enough atmosphere for wind turbines, so
+atmospheric thrusters retain some authority there.)
+
+**Not space-like:** 0.25 g is a real gravity well. Things that do not apply in
+space and very much do here:
+
+- A loaded ship can be too heavy to climb out. The lift survey exists for exactly
+  this and must stay enabled.
+- Falling is a failure mode again. From 100 m at 0.25 g you arrive at 22 m/s.
+- Station-keeping costs power continuously, so reserves need to be larger.
+
+```ini
+[vein.mining]
+depthMode=AutoOre
+holeOrder=Prospect
+eject=Stone
+drillSpeed=1.5
+retreatSpeed=5.0
+cruiseSpeed=80
+dockSpeed=1.5
+cargoFullAt=0.90
+
+[vein.scouting]
+probeDepth=20
+probeStride=2
+
+[vein.safety]
+minBattery=0.30
+minHydrogen=0.25
+liftSafetyFactor=0.75
+transitAltitude=20
+stateTimeout=280
+```
+
+The one line that matters: **`liftSafetyFactor=0.75`, not 1.0.** Everything else
+is a comfort setting; that one is the difference between refusing a load you
+cannot lift and discovering it halfway up.
+
+Note that the lift survey handles airless moons correctly without being told
+anything. It measures thrust actually available against gravity actually present
+at each recorded waypoint, so atmospheric thrusters on a moon simply contribute
+zero and the mass ceiling comes out right. That is the advantage of measuring
+rather than configuring.
+
+**On terrain roughness** — you are right that moons are not much bumpier than an
+asteroid, and it no longer matters either way. Shafts measure depth from where
+the drills first touch rock, not from the job plane, so a grid laid across a
+slope or a crater rim works the same as one on flat ground. That fix was written
+for asteroids and applies to any uneven surface.
 
 ## Fleet notes
 
