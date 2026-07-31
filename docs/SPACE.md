@@ -195,6 +195,43 @@ the drills first touch rock, not from the job plane, so a grid laid across a
 slope or a crater rim works the same as one on flat ground. That fix was written
 for asteroids and applies to any uneven surface.
 
+## Ice, and why not to eject it
+
+Moon poles carry a great deal of ice, and on a hydrogen ship **ice is fuel**.
+
+Set `eject=Stone`. Never `StoneAndIce` on an ice-rich site with hydrogen
+thrusters — you would be throwing the return trip overboard to make room for
+cargo.
+
+Fit an oxygen/hydrogen generator and the ship becomes self-fuelling: mine ice,
+make hydrogen, keep working. The fuel model copes with this without being told.
+It discards any sample where the tank level rose, so a generator outpacing the
+thrusters cannot corrupt the measured burn rate, and the return-fuel check
+simply stops tripping — which is the correct behaviour for a ship that makes its
+own fuel.
+
+## Coasting and braking authority
+
+The flight controller switches the game's dampeners off and drives the thrusters
+directly. At cruise, once the ship is at commanded speed the velocity error goes
+to zero, every thruster override goes to zero, and in the absence of gravity the
+ship coasts ballistically, burning nothing. It fires again only to correct drift
+or to brake.
+
+Braking is computed from stopping distance, so the ship holds speed for as long
+as it can still stop in the remaining distance, then decelerates hard. That is
+the efficient profile rather than a constant-thrust crawl.
+
+**This is why a drill-nosed ship may cruise slower than `cruiseSpeed`.** Flying
+nose-first, deceleration needs forward-facing thrusters, and on a miner the nose
+is full of drills. The controller measures the braking authority that actually
+exists and caps speed to what it can stop from — safe, but it looks as though
+the setting is being ignored.
+
+If the display reports a fraction of the configured cruise speed, the ship is
+braking-limited. Add reverse thrust; it is the cheapest fix and it makes the ship
+better to fly by hand as well.
+
 ## Fleet notes
 
 Nothing changes structurally, but two settings interact with the geometry:
