@@ -1,13 +1,16 @@
 # Design notes: what VEIN takes from PAM and SCAM, and what it changes
 
-## A note on the name "S.C.U.M"
+## A note on the name
 
-If you came here looking for S.C.U.M — the script is **[SCAM] Simple Concurrent
-Adaptive Min3r** by cheerkin. It is worth knowing that the Steam Workshop listing
-has since been removed for violating Steam's content guidelines, which is almost
-certainly about the acronym rather than the code. The design ideas survive in the
-Workshop discussions and in scripts that credit it, and they are good ideas. They
-are treated seriously below.
+The script is **[SCAM] Simple Concurrent Adaptive Min3r** by cheerkin — sometimes
+misremembered as S.C.U.M. The Steam Workshop listing was removed for violating
+Steam's content guidelines, which is almost certainly about the acronym rather
+than the code: a good piece of engineering delisted by a keyword filter.
+
+The observations below about SCAM come from reading its source, not from its
+Workshop description. It is only lightly minified, so it reads directly. Where
+this document previously inferred something about SCAM from forum threads, those
+inferences have been replaced with what the code actually does.
 
 ---
 
@@ -83,6 +86,120 @@ Where it falls short:
 - **Tuned for spherical vanilla deposits.** Less happy with irregular ones.
 - **Adaptation is per-shaft and then forgotten.** Nothing accumulates into a
   picture of the site.
+
+---
+
+---
+
+## What comparing them teaches
+
+The useful signal is not what each script does well. It is **where two authors
+who never collaborated arrived at the same answer**, versus where they diverged.
+
+### Where they agree — treat these as facts about the domain
+
+Independent convergence is much stronger evidence than either saying it alone:
+
+- **Never use the Remote Control autopilot.** Both bypass it entirely for direct
+  thrust and gyro override.
+- **Stopping speed is `sqrt(2ad)`, with a large empirical derate.** The formula
+  is identical in both. The margin is not derived — PAM 0.70, SCAM 0.50 — and
+  both sit far below what the arithmetic alone suggests.
+- **Drill slowly.** SCAM ships 0.6 m/s; PAM's guidance is that above roughly
+  2 m/s the drills stop keeping up and the ship wedges.
+- **Detect stuck by depth progress, never by velocity.** A ship grinding against
+  rock is moving plenty while going nowhere.
+- **The drills are the ore sensor.** SCAM's entire premise; PAM's AutoOre mode.
+  Two independent routes to the same conclusion, because vanilla offers no other.
+- **Align first, then translate.** Both maintain distinct alignment states rather
+  than rotating and moving at once.
+- **Roughly 12 m between drones.** SCAM's echelon offset, and the figure VEIN
+  chose independently before ever seeing it.
+
+### Where they diverge — opposite problems, complementary weaknesses
+
+| | PAM | SCAM |
+|---|---|---|
+| Route | Human-recorded | Computed |
+| Topology | One ship | Dispatcher and N agents |
+| Job shape | Rectangle | Circular generations from a centre |
+| Spatial exclusion | not applicable | Named-section mutex with a queue |
+| Characteristic failure | **hangs** | **deadlocks** — hence a manual lock purge |
+
+**PAM optimises for one ship being reliable. SCAM optimises for many ships being
+productive.** Each is weakest precisely where the other is strong. PAM spends
+equal effort on platinum and on granite; SCAM cannot run at all without a base
+brain, and ships with a manual escape hatch for the deadlocks its own locking
+causes.
+
+### The asymmetry that explains all of it
+
+Every constant that matters here is empirical, and every value VEIN derived from
+first principles was too aggressive. Drill speed: three times too fast. Braking
+derate: above both shipped implementations. Battery resume: holding at the dock
+for a fifth of a charge worth nothing. Gyro gain spread between grid sizes: half
+what it needed to be.
+
+That is not coincidence. The failure modes in this game are jamming, overshooting,
+wedging, and latching while still drifting — every one of them a variant of
+*moved too fast, committed too early*. **There is no failure mode called moved
+too slowly.** The domain is asymmetric, and reasoning from physics does not
+encode that asymmetry. Watching ships does.
+
+Both ancestors also ship a **blunt give-up mechanism** — PAM's stuck-retry-then-
+abandon, SCAM's force-finish and lock purge. Neither attempts clever recovery.
+That is experience, not laziness, and VEIN's watchdog is the same instinct.
+
+---
+
+## How to improve on both
+
+Ranked by value per line. The ordering matters more than the list.
+
+### 1. Measure the constants instead of shipping them
+
+This follows directly from the asymmetry above and is the strongest idea
+available. If two experienced authors had to *discover* 0.6 m/s by watching
+ships, and every value derived here was wrong in the same direction, then the
+right move is to ship no number at all:
+
+- **Drill speed** — back off on a stall, creep up while cutting cleanly.
+  Converges on what *this hull* can actually do, which is neither 0.6 nor 1.8
+  but a property of the ship.
+- **Braking derate** — compare predicted stopping distance against what actually
+  happened and correct the ratio. The ship learns its own thrust lag and its
+  server's tick rate.
+
+VEIN already does exactly this for hydrogen consumption. Extending it to the two
+constants responsible for most of its early mistakes is the single highest-value
+change available, and **neither ancestor does it at all.**
+
+The one rule: an adaptive value must be **visible and overridable**. Adaptation
+you cannot see is indistinguishable from a bug, which is a large part of why
+SCAM is considered fiddly.
+
+### 2. Take SCAM's lock; keep VEIN's lease
+
+These are orthogonal and were conflated here for a long time. A **lease** answers
+*who owns this work*; a **lock** answers *who may occupy this space*. SCAM grants
+work permanently, so a dead drone's shaft is lost until somebody purges. VEIN
+expires leases on silence but has no spatial exclusion whatsoever. Both
+mechanisms together is strictly better than either, and the absence of expiry is
+why SCAM needed a purge command in the first place.
+
+### 3. Let the survey choose the job's shape
+
+PAM's rectangle matches nothing in particular. SCAM's circular generations match
+spherical deposits and nothing else. If shafts grow toward measured yield instead
+of filling a predefined region, the question stops existing — the deposit's real
+shape emerges from the map. This is the strongest argument for auto-following the
+ore, and a better one than convenience.
+
+### 4. Keep the persistent map
+
+The one thing neither ancestor has, and the thing that makes their strengths
+compose. SCAM's dispatcher has no *basis* on which to decide where to send
+drones. A shared, persistent yield map gives it one.
 
 ---
 
@@ -230,7 +347,7 @@ Worth being clear about, so nobody wastes an evening:
 
 | Symptom | Setting | Direction |
 |---|---|---|
-| Ship jams in shafts | `drillSpeed` | Lower. Above ~2 m/s drills stop keeping up. |
+| Ship jams in shafts | `drillSpeed` | Lower. SCAM ships 0.6; above ~2 m/s the drills cannot keep up. |
 | Too many dry holes | `probeStride` | Lower — survey more finely. |
 | Survey takes too long | `probeStride`, `probeDepth` | Raise stride, lower depth. |
 | Gives up on good ground | `barrenThreshold` | Lower. |
