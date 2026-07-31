@@ -81,6 +81,20 @@ bool ValidateJobBasis()
     return true;
 }
 
+/// <summary>
+/// Anchor the job at an explicit world position, taking the drilling axes from
+/// the ship's current attitude. In vanilla the player is the only ore sensor
+/// there is — this is the interface that lets a coordinate read off the HUD
+/// become an automated job.
+/// </summary>
+void SetJobAt(Vector3D origin, int width, int height, int depth)
+{
+    SetJob(width, height, depth);
+    if (!job.IsSet) return;
+    job.Origin = origin;
+    Log("Job anchored at supplied coordinates");
+}
+
 void RebuildCells()
 {
     cells = new YieldCell[job.CellCount];
@@ -415,6 +429,98 @@ double JobProgress()
         if (cells[i].State == CellState.Exhausted || cells[i].State == CellState.Blocked) done++;
     return (double)done / cells.Length;
 }
+
+// ---------------------------------------------------------------------------
+//  FOLLOWING THE DEPOSIT
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// The grid is worked out, but the ore may not be. If the survey found richness
+/// pressed against one edge, the deposit continues that way — so move the grid
+/// rather than declaring victory.
+///
+/// This is what dissolves the rectangle-versus-circle question the ancestors
+/// answer differently. PAM's rectangle matches nothing in particular and SCAM's
+/// circular generations match spherical deposits and nothing else. A grid that
+/// walks toward measured yield takes the shape of whatever is actually there.
+/// </summary>
+/// <returns>True if the job was re-anchored and there is work again.</returns>
+bool TryFollowOre()
+{
+    if (!followOre || cells.Length == 0) return false;
+    if (followCount >= FOLLOW_LIMIT)
+    {
+        Log("Follow limit reached (" + FOLLOW_LIMIT + ") — stopping here");
+        return false;
+    }
+
+    // Mean yield in the outer band of each edge, over cells actually drilled.
+    int band = Math.Max(1, Math.Min(2, Math.Min(job.Width, job.Height) / 3));
+    double bestScore = 0;
+    int bestEdge = -1;
+
+    for (int edge = 0; edge < 4; edge++)
+    {
+        double sum = 0; int n = 0;
+        for (int row = 0; row < job.Height; row++)
+        {
+            for (int col = 0; col < job.Width; col++)
+            {
+                bool inBand =
+                    (edge == 0 && col < band) ||                    // -Right
+                    (edge == 1 && col >= job.Width - band) ||       // +Right
+                    (edge == 2 && row < band) ||                    // -Forward
+                    (edge == 3 && row >= job.Height - band);        // +Forward
+                if (!inBand) continue;
+
+                YieldCell c = cells[job.IndexOf(col, row)];
+                if (c.MetresDrilled < 0.5f) continue;
+                sum += c.Yield; n++;
+            }
+        }
+        if (n == 0) continue;
+        double mean = sum / n;
+        if (mean > bestScore) { bestScore = mean; bestEdge = edge; }
+    }
+
+    if (bestEdge < 0 || bestScore < barrenThreshold) return false;
+
+    // Shift three quarters of a grid, so the rich edge lands near the middle of
+    // the new one and its neighbourhood gets surveyed properly rather than
+    // clipped by the boundary again.
+    Vector3D dir =
+        bestEdge == 0 ? -job.Right :
+        bestEdge == 1 ?  job.Right :
+        bestEdge == 2 ? -job.Forward : job.Forward;
+    double span = (bestEdge < 2 ? job.Width : job.Height) * job.Spacing * 0.75;
+
+    job.Origin = job.Origin + dir * span;
+    RebuildCells();
+    probePassDone = false;
+    activeCell = -1;
+    scoreCursor = 0;
+    followCount++;
+
+    Log("Ore continues " + EdgeName(bestEdge) + " (" + Fmt(bestScore, 1)
+        + " kg/m) — job moved " + Fmt(span, 0) + "m, follow " + followCount
+        + "/" + FOLLOW_LIMIT);
+    return true;
+}
+
+static string EdgeName(int edge)
+{
+    switch (edge)
+    {
+        case 0: return "left";
+        case 1: return "right";
+        case 2: return "back";
+        default: return "forward";
+    }
+}
+
+/// <summary>How many times a job may walk before it stops on its own. Without a
+/// bound a rich seam could march the ship off the far side of the asteroid.</summary>
+const int FOLLOW_LIMIT = 6;
 
 // ---------------------------------------------------------------------------
 //  RESULT RECORDING

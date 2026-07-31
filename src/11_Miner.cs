@@ -16,6 +16,8 @@ void TickMiner()
     CheckDamage();
     Watchdog();
     UpdateOreScan();
+    UpdateAdaptive();
+    TrackBraking();
     EjectWhileFlying();
     if (!Docked) UpdateFuelModel();
 
@@ -158,6 +160,7 @@ void StSelecting(bool entry)
 
     // ---- Solo -------------------------------------------------------------
     int cell = SelectNextCell();
+    if (cell < 0 && TryFollowOre()) cell = SelectNextCell();
     if (cell < 0)
     {
         jobComplete = true;
@@ -219,6 +222,14 @@ void StApproaching(bool entry)
     bool square = alignError < 4.0;
 
     if (!overHole || !square) return;
+
+    // Squared up over the hole, but the airspace below may belong to another
+    // drone. Hold here rather than descend into it.
+    if (!HoldsAirspaceFor(activeCell))
+    {
+        statusLine = "Waiting for airspace " + SectionFor(activeCell);
+        return;
+    }
 
     // Last check before committing: is there anything down there at all?
     // The drills point along the shaft axis and so does a forward camera, so a
@@ -295,7 +306,7 @@ void StDescending(bool entry)
     // Drop fast through the air, then slow down and switch on at the rock.
     bool inRock = shaftDepth > -2.0;
     SetDrills(inRock);
-    double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
+    double descentSpeed = inRock ? learnedDrillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
 
     // ---- Stop conditions, most urgent first --------------------------------
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
@@ -309,6 +320,7 @@ void StDescending(bool entry)
     // ship is still accelerating downward.
     if (inRock && IsStuck())
     {
+        OnDrillStall();
         stuckRetries++;
         if (stuckRetries > 3) { AbandonShaft(ShaftResult.Stuck); return; }
 
@@ -328,6 +340,8 @@ void StDescending(bool entry)
     // the velocity controller holds a steady cutting speed instead of easing off
     // as it approaches a distant target. Clamped at zero so that while we are
     // still above the surface the aim point is inside the rock, not behind us.
+    if (inRock) OnCleanCut();
+
     double aimDepth = Math.Min(EffectiveDepthLimit(), Math.Max(shaftDepth, 0.0) + 5.0);
     Vector3D bite = job.CellDepth(col, row, aimDepth);
     FlyTo(ControllerTargetFor(bite), descentSpeed);
@@ -390,6 +404,7 @@ void FinishShaft()
 
     RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
     ReleaseLeaseLocal();
+    ReleaseAirspace();
 
     Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
         + Fmt(cut, 1) + "m cut");

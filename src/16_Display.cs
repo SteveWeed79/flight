@@ -116,6 +116,7 @@ void RenderMiner()
     }
 
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
+    sb.Append("Tune   ").Append(AdaptiveStatus()).Append('\n');
 
     if (flightActive)
         sb.Append("Nav    ").Append(Fmt(distToTarget, 1)).Append("m  ")

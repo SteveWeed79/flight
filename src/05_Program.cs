@@ -171,6 +171,7 @@ void EnterFault(string why)
     stateEntry = true;
     jobRunning = false;
     ReleaseLease(ShaftResult.Aborted);
+    ReleaseAirspace();
     SafeStop();
 }
 

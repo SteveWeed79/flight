@@ -98,6 +98,11 @@ void HandleCommand(string argument, bool allowRelay = true)
             Log(state + " / " + statusLine);
             break;
 
+        case "purge":
+            if (role == Role.Dispatcher) PurgeAllLocks();
+            else { ReleaseAirspace(); Log("Released held airspace"); }
+            break;
+
         case "scan":
             oreModProbed = false;      // force a fresh mod check
             Log("Rescanning for ore detector mod");
@@ -179,14 +184,14 @@ void CmdJob(string[] a)
 {
     if (a.Length < 2)
     {
-        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here");
+        Log("job set <w> <h> <d> | gps <x> <y> <z> | here | size <w> <h> | depth <m>");
         return;
     }
 
     // Anchoring uses the ship's live position and attitude. Doing that while the
     // ship is nose-down inside a shaft would put the job plane underground and
     // silently invalidate the whole survey, so it is refused unless parked.
-    if ((a[1] == "set" || a[1] == "here") && role == Role.Miner
+    if ((a[1] == "set" || a[1] == "here" || a[1] == "gps") && role == Role.Miner
         && state != MinerState.Idle && state != MinerState.Fault && !Docked)
     {
         Log("Cannot anchor a job while flying — run 'stop' or 'halt' first");
@@ -198,6 +203,15 @@ void CmdJob(string[] a)
         case "set":
             if (a.Length < 5) { Log("job set <width> <height> <depth>"); return; }
             SetJob(ParseInt(a[2], 5), ParseInt(a[3], 5), ParseInt(a[4], 40));
+            if (role == Role.Dispatcher) SendBeacon();
+            break;
+
+        case "gps":
+            // job gps <x> <y> <z> [depth] — point the nose the drilling
+            // direction first; the axes come from the ship's attitude.
+            if (a.Length < 5) { Log("job gps <x> <y> <z> [depth]"); return; }
+            SetJobAt(new Vector3D(ParseDouble(a[2], 0), ParseDouble(a[3], 0), ParseDouble(a[4], 0)),
+                     job.Width, job.Height, a.Length > 5 ? ParseInt(a[5], job.Depth) : job.Depth);
             if (role == Role.Dispatcher) SendBeacon();
             break;
 

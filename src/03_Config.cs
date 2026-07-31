@@ -33,6 +33,9 @@ double dockSpeed = 0.8;
 double cargoFullAt = 0.92;
 /// <summary>Leave drills running on the way up. Widens the shaft, costs time.</summary>
 bool drillOnRetreat = false;
+/// <summary>When a grid is worked out but ore continues past an edge, move the
+/// grid and keep going instead of declaring the job finished.</summary>
+bool followOre = true;
 
 // ---- Scouting -------------------------------------------------------------
 /// <summary>Metres. How deep a probe shaft goes before we judge the cell.</summary>
@@ -128,6 +131,7 @@ void LoadConfig()
     dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
     cargoFullAt   = Clamp(ini.Get(S_MINE, "cargoFullAt").ToDouble(0.92), 0.1, 0.99);
     drillOnRetreat = ini.Get(S_MINE, "drillOnRetreat").ToBoolean(false);
+    followOre     = ini.Get(S_MINE, "followOre").ToBoolean(true);
 
     probeDepth    = Clamp(ini.Get(S_SCOUT, "probeDepth").ToDouble(12.0), 2.0, 200.0);
     probeStride   = (int)Clamp(ini.Get(S_SCOUT, "probeStride").ToInt32(2), 1, 8);
@@ -190,6 +194,8 @@ void WriteConfig()
     ini.SetComment(S_MINE, "dockSpeed", "m/s on the final mating run. PAM uses 0.5 and docking is the\nmanoeuvre most likely to go wrong; slower is genuinely better here.");
     ini.Set(S_MINE, "cargoFullAt", cargoFullAt);
     ini.Set(S_MINE, "drillOnRetreat", drillOnRetreat);
+    ini.Set(S_MINE, "followOre", followOre);
+    ini.SetComment(S_MINE, "followOre", "When the grid is worked out but the survey shows ore continuing\npast an edge, move the grid that way and keep going. Bounded at\nsix moves so a rich seam cannot walk the ship off the asteroid.");
 
     ini.Set(S_SCOUT, "probeDepth", probeDepth);
     ini.SetComment(S_SCOUT, "probeDepth", "Prospect mode: metres per test shaft before judging a cell.");

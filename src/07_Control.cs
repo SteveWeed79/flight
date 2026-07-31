@@ -161,7 +161,7 @@ void FlyTo(Vector3D target, double maxSpeed)
 
     // Speed we could still shed before arriving: v = sqrt(2 a d).
     double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BRAKE_DERATE;
+    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * learnedBrakeDerate;
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
 

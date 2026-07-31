@@ -61,6 +61,9 @@ void HandleMessage(long src, string body)
         case "DG": OnDockGrant(src, f); break;
         case "DX": OnDockRelease(src, f); break;
         case "OS": OnOreSighting(src, f); break;
+        case "KA": if (role == Role.Dispatcher && f.Length > 1) OnLockRequest(src, f[1]); break;
+        case "KG": if (role == Role.Miner && f.Length > 1) OnLockGranted(f[1]); break;
+        case "KR": if (role == Role.Dispatcher && f.Length > 1) OnLockRelease(src, f[1]); break;
         case "C":  if (f.Length > 1) HandleCommand(f[1], false); break;
     }
 }

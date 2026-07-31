@@ -376,6 +376,9 @@ double dockSpeed = 0.8;
 double cargoFullAt = 0.92;
 /// <summary>Leave drills running on the way up. Widens the shaft, costs time.</summary>
 bool drillOnRetreat = false;
+/// <summary>When a grid is worked out but ore continues past an edge, move the
+/// grid and keep going instead of declaring the job finished.</summary>
+bool followOre = true;
 
 // ---- Scouting -------------------------------------------------------------
 /// <summary>Metres. How deep a probe shaft goes before we judge the cell.</summary>
@@ -471,6 +474,7 @@ void LoadConfig()
     dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
     cargoFullAt   = Clamp(ini.Get(S_MINE, "cargoFullAt").ToDouble(0.92), 0.1, 0.99);
     drillOnRetreat = ini.Get(S_MINE, "drillOnRetreat").ToBoolean(false);
+    followOre     = ini.Get(S_MINE, "followOre").ToBoolean(true);
 
     probeDepth    = Clamp(ini.Get(S_SCOUT, "probeDepth").ToDouble(12.0), 2.0, 200.0);
     probeStride   = (int)Clamp(ini.Get(S_SCOUT, "probeStride").ToInt32(2), 1, 8);
@@ -533,6 +537,8 @@ void WriteConfig()
     ini.SetComment(S_MINE, "dockSpeed", "m/s on the final mating run. PAM uses 0.5 and docking is the\nmanoeuvre most likely to go wrong; slower is genuinely better here.");
     ini.Set(S_MINE, "cargoFullAt", cargoFullAt);
     ini.Set(S_MINE, "drillOnRetreat", drillOnRetreat);
+    ini.Set(S_MINE, "followOre", followOre);
+    ini.SetComment(S_MINE, "followOre", "When the grid is worked out but the survey shows ore continuing\npast an edge, move the grid that way and keep going. Bounded at\nsix moves so a rich seam cannot walk the ship off the asteroid.");
 
     ini.Set(S_SCOUT, "probeDepth", probeDepth);
     ini.SetComment(S_SCOUT, "probeDepth", "Prospect mode: metres per test shaft before judging a cell.");
@@ -757,6 +763,19 @@ double shaftContactDepth = -1;
 double shaftStartVolume;
 /// <summary>Whether the prospect pass has finished its probe lattice.</summary>
 bool probePassDone;
+/// <summary>How many times this job has walked toward continuing ore.</summary>
+int followCount;
+
+// ---- Self-tuning ----------------------------------------------------------
+/// <summary>Live drilling speed. Never exceeds the configured drillSpeed.</summary>
+double learnedDrillSpeed;
+/// <summary>Live braking derate. Never exceeds BRAKE_DERATE.</summary>
+double learnedBrakeDerate;
+int cleanCutTicks;
+int drillStalls;
+int brakeOvershoots;
+bool brakeWatchArmed;
+double brakeClosest;
 
 // ---- Adaptive depth -------------------------------------------------------
 double lastOreSample;
@@ -847,6 +866,20 @@ int myDockSlot = -1;
 readonly Dictionary<int, long> dockSlotOwner = new Dictionary<int, long>();
 /// <summary>Tick we last asked the dispatcher for something, for retry backoff.</summary>
 long lastRequestTick;
+
+// ---- Airspace locks -------------------------------------------------------
+/// <summary>Miner: section we currently hold, empty if none.</summary>
+string heldLock = "";
+bool awaitingLock;
+long lockAskedTick;
+/// <summary>Dispatcher: who holds each section.</summary>
+readonly Dictionary<string, long> lockOwner = new Dictionary<string, long>();
+/// <summary>Dispatcher: FIFO of drones waiting on each section.</summary>
+readonly Dictionary<string, List<long>> lockQueue = new Dictionary<string, List<long>>();
+/// <summary>Dispatcher: when each held section falls in, if unrenewed.</summary>
+readonly Dictionary<string, long> lockExpiry = new Dictionary<string, long>();
+/// <summary>Scratch for mutating the lock tables without enumerating while removing.</summary>
+readonly List<string> lockScratch = new List<string>();
 
 // ---- Scouting -------------------------------------------------------------
 /// <summary>True once we have confirmed the Ore Detector Raycast mod responds.</summary>
@@ -1040,6 +1073,7 @@ void EnterFault(string why)
     stateEntry = true;
     jobRunning = false;
     ReleaseLease(ShaftResult.Aborted);
+    ReleaseAirspace();
     SafeStop();
 }
 
@@ -1502,7 +1536,7 @@ void FlyTo(Vector3D target, double maxSpeed)
 
     // Speed we could still shed before arriving: v = sqrt(2 a d).
     double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BRAKE_DERATE;
+    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * learnedBrakeDerate;
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
 
@@ -2236,6 +2270,20 @@ bool ValidateJobBasis()
     return true;
 }
 
+/// <summary>
+/// Anchor the job at an explicit world position, taking the drilling axes from
+/// the ship's current attitude. In vanilla the player is the only ore sensor
+/// there is — this is the interface that lets a coordinate read off the HUD
+/// become an automated job.
+/// </summary>
+void SetJobAt(Vector3D origin, int width, int height, int depth)
+{
+    SetJob(width, height, depth);
+    if (!job.IsSet) return;
+    job.Origin = origin;
+    Log("Job anchored at supplied coordinates");
+}
+
 void RebuildCells()
 {
     cells = new YieldCell[job.CellCount];
@@ -2570,6 +2618,98 @@ double JobProgress()
         if (cells[i].State == CellState.Exhausted || cells[i].State == CellState.Blocked) done++;
     return (double)done / cells.Length;
 }
+
+// ---------------------------------------------------------------------------
+//  FOLLOWING THE DEPOSIT
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// The grid is worked out, but the ore may not be. If the survey found richness
+/// pressed against one edge, the deposit continues that way — so move the grid
+/// rather than declaring victory.
+///
+/// This is what dissolves the rectangle-versus-circle question the ancestors
+/// answer differently. PAM's rectangle matches nothing in particular and SCAM's
+/// circular generations match spherical deposits and nothing else. A grid that
+/// walks toward measured yield takes the shape of whatever is actually there.
+/// </summary>
+/// <returns>True if the job was re-anchored and there is work again.</returns>
+bool TryFollowOre()
+{
+    if (!followOre || cells.Length == 0) return false;
+    if (followCount >= FOLLOW_LIMIT)
+    {
+        Log("Follow limit reached (" + FOLLOW_LIMIT + ") — stopping here");
+        return false;
+    }
+
+    // Mean yield in the outer band of each edge, over cells actually drilled.
+    int band = Math.Max(1, Math.Min(2, Math.Min(job.Width, job.Height) / 3));
+    double bestScore = 0;
+    int bestEdge = -1;
+
+    for (int edge = 0; edge < 4; edge++)
+    {
+        double sum = 0; int n = 0;
+        for (int row = 0; row < job.Height; row++)
+        {
+            for (int col = 0; col < job.Width; col++)
+            {
+                bool inBand =
+                    (edge == 0 && col < band) ||                    // -Right
+                    (edge == 1 && col >= job.Width - band) ||       // +Right
+                    (edge == 2 && row < band) ||                    // -Forward
+                    (edge == 3 && row >= job.Height - band);        // +Forward
+                if (!inBand) continue;
+
+                YieldCell c = cells[job.IndexOf(col, row)];
+                if (c.MetresDrilled < 0.5f) continue;
+                sum += c.Yield; n++;
+            }
+        }
+        if (n == 0) continue;
+        double mean = sum / n;
+        if (mean > bestScore) { bestScore = mean; bestEdge = edge; }
+    }
+
+    if (bestEdge < 0 || bestScore < barrenThreshold) return false;
+
+    // Shift three quarters of a grid, so the rich edge lands near the middle of
+    // the new one and its neighbourhood gets surveyed properly rather than
+    // clipped by the boundary again.
+    Vector3D dir =
+        bestEdge == 0 ? -job.Right :
+        bestEdge == 1 ?  job.Right :
+        bestEdge == 2 ? -job.Forward : job.Forward;
+    double span = (bestEdge < 2 ? job.Width : job.Height) * job.Spacing * 0.75;
+
+    job.Origin = job.Origin + dir * span;
+    RebuildCells();
+    probePassDone = false;
+    activeCell = -1;
+    scoreCursor = 0;
+    followCount++;
+
+    Log("Ore continues " + EdgeName(bestEdge) + " (" + Fmt(bestScore, 1)
+        + " kg/m) — job moved " + Fmt(span, 0) + "m, follow " + followCount
+        + "/" + FOLLOW_LIMIT);
+    return true;
+}
+
+static string EdgeName(int edge)
+{
+    switch (edge)
+    {
+        case 0: return "left";
+        case 1: return "right";
+        case 2: return "back";
+        default: return "forward";
+    }
+}
+
+/// <summary>How many times a job may walk before it stops on its own. Without a
+/// bound a rich seam could march the ship off the far side of the asteroid.</summary>
+const int FOLLOW_LIMIT = 6;
 
 // ---------------------------------------------------------------------------
 //  RESULT RECORDING
@@ -2947,6 +3087,8 @@ void TickMiner()
     CheckDamage();
     Watchdog();
     UpdateOreScan();
+    UpdateAdaptive();
+    TrackBraking();
     EjectWhileFlying();
     if (!Docked) UpdateFuelModel();
 
@@ -3089,6 +3231,7 @@ void StSelecting(bool entry)
 
     // ---- Solo -------------------------------------------------------------
     int cell = SelectNextCell();
+    if (cell < 0 && TryFollowOre()) cell = SelectNextCell();
     if (cell < 0)
     {
         jobComplete = true;
@@ -3150,6 +3293,14 @@ void StApproaching(bool entry)
     bool square = alignError < 4.0;
 
     if (!overHole || !square) return;
+
+    // Squared up over the hole, but the airspace below may belong to another
+    // drone. Hold here rather than descend into it.
+    if (!HoldsAirspaceFor(activeCell))
+    {
+        statusLine = "Waiting for airspace " + SectionFor(activeCell);
+        return;
+    }
 
     // Last check before committing: is there anything down there at all?
     // The drills point along the shaft axis and so does a forward camera, so a
@@ -3226,7 +3377,7 @@ void StDescending(bool entry)
     // Drop fast through the air, then slow down and switch on at the rock.
     bool inRock = shaftDepth > -2.0;
     SetDrills(inRock);
-    double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
+    double descentSpeed = inRock ? learnedDrillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
 
     // ---- Stop conditions, most urgent first --------------------------------
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
@@ -3240,6 +3391,7 @@ void StDescending(bool entry)
     // ship is still accelerating downward.
     if (inRock && IsStuck())
     {
+        OnDrillStall();
         stuckRetries++;
         if (stuckRetries > 3) { AbandonShaft(ShaftResult.Stuck); return; }
 
@@ -3259,6 +3411,8 @@ void StDescending(bool entry)
     // the velocity controller holds a steady cutting speed instead of easing off
     // as it approaches a distant target. Clamped at zero so that while we are
     // still above the surface the aim point is inside the rock, not behind us.
+    if (inRock) OnCleanCut();
+
     double aimDepth = Math.Min(EffectiveDepthLimit(), Math.Max(shaftDepth, 0.0) + 5.0);
     Vector3D bite = job.CellDepth(col, row, aimDepth);
     FlyTo(ControllerTargetFor(bite), descentSpeed);
@@ -3321,6 +3475,7 @@ void FinishShaft()
 
     RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
     ReleaseLeaseLocal();
+    ReleaseAirspace();
 
     Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
         + Fmt(cut, 1) + "m cut");
@@ -4032,6 +4187,9 @@ void HandleMessage(long src, string body)
         case "DG": OnDockGrant(src, f); break;
         case "DX": OnDockRelease(src, f); break;
         case "OS": OnOreSighting(src, f); break;
+        case "KA": if (role == Role.Dispatcher && f.Length > 1) OnLockRequest(src, f[1]); break;
+        case "KG": if (role == Role.Miner && f.Length > 1) OnLockGranted(f[1]); break;
+        case "KR": if (role == Role.Dispatcher && f.Length > 1) OnLockRelease(src, f[1]); break;
         case "C":  if (f.Length > 1) HandleCommand(f[1], false); break;
     }
 }
@@ -4397,6 +4555,7 @@ void TickDispatcher()
     if (tick % 30 == 0) SendBeacon();
 
     ExpireLeases();
+    ExpireAirspaceLocks();
     ExpireDrones();
 }
 
@@ -4461,6 +4620,7 @@ void ExpireDrones()
                 dockSlotOwner.Remove(r.DockSlot);
         }
 
+        PurgeDroneLocks(addr);
         fleet.Remove(addr);
     }
 
@@ -4782,6 +4942,7 @@ void RenderMiner()
     }
 
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
+    sb.Append("Tune   ").Append(AdaptiveStatus()).Append('\n');
 
     if (flightActive)
         sb.Append("Nav    ").Append(Fmt(distToTarget, 1)).Append("m  ")
@@ -4984,6 +5145,11 @@ void HandleCommand(string argument, bool allowRelay = true)
             Log(state + " / " + statusLine);
             break;
 
+        case "purge":
+            if (role == Role.Dispatcher) PurgeAllLocks();
+            else { ReleaseAirspace(); Log("Released held airspace"); }
+            break;
+
         case "scan":
             oreModProbed = false;      // force a fresh mod check
             Log("Rescanning for ore detector mod");
@@ -5065,14 +5231,14 @@ void CmdJob(string[] a)
 {
     if (a.Length < 2)
     {
-        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here");
+        Log("job set <w> <h> <d> | gps <x> <y> <z> | here | size <w> <h> | depth <m>");
         return;
     }
 
     // Anchoring uses the ship's live position and attitude. Doing that while the
     // ship is nose-down inside a shaft would put the job plane underground and
     // silently invalidate the whole survey, so it is refused unless parked.
-    if ((a[1] == "set" || a[1] == "here") && role == Role.Miner
+    if ((a[1] == "set" || a[1] == "here" || a[1] == "gps") && role == Role.Miner
         && state != MinerState.Idle && state != MinerState.Fault && !Docked)
     {
         Log("Cannot anchor a job while flying — run 'stop' or 'halt' first");
@@ -5084,6 +5250,15 @@ void CmdJob(string[] a)
         case "set":
             if (a.Length < 5) { Log("job set <width> <height> <depth>"); return; }
             SetJob(ParseInt(a[2], 5), ParseInt(a[3], 5), ParseInt(a[4], 40));
+            if (role == Role.Dispatcher) SendBeacon();
+            break;
+
+        case "gps":
+            // job gps <x> <y> <z> [depth] — point the nose the drilling
+            // direction first; the axes come from the ship's attitude.
+            if (a.Length < 5) { Log("job gps <x> <y> <z> [depth]"); return; }
+            SetJobAt(new Vector3D(ParseDouble(a[2], 0), ParseDouble(a[3], 0), ParseDouble(a[4], 0)),
+                     job.Width, job.Height, a.Length > 5 ? ParseInt(a[5], job.Depth) : job.Depth);
             if (role == Role.Dispatcher) SendBeacon();
             break;
 
@@ -5186,6 +5361,12 @@ string SerializeState()
          .Append('\n');
     }
 
+    b.Append("A|").Append(EncD(learnedDrillSpeed))
+     .Append('|').Append(EncD(learnedBrakeDerate))
+     .Append('|').Append(drillStalls)
+     .Append('|').Append(brakeOvershoots)
+     .Append('\n');
+
     if (homeDockSet && homeDock != null)
     {
         b.Append("D|").Append(EncV(homeDock.Position))
@@ -5244,6 +5425,14 @@ void LoadState()
                 case "P":
                     if (!versionOk || f.Length < 4) break;
                     path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), new float[0], (float)DecD(f[3])));
+                    break;
+
+                case "A":
+                    if (!versionOk || f.Length < 5) break;
+                    learnedDrillSpeed = DecD(f[1]);
+                    learnedBrakeDerate = DecD(f[2]);
+                    drillStalls = ParseInt(f[3], 0);
+                    brakeOvershoots = ParseInt(f[4], 0);
                     break;
 
                 case "D":
@@ -5753,5 +5942,321 @@ static Color Dim(Color c, float f)
 {
     return new Color((int)(c.R * f), (int)(c.G * f), (int)(c.B * f));
 }
+#endregion
+
+#region 20_Adaptive.cs
+// ============================================================================
+//  SELF-TUNING
+//
+//  PAM and SCAM both ship hand-tuned constants that no derivation produces —
+//  0.6 m/s drilling, a 0.5 to 0.7 braking derate — arrived at by watching real
+//  ships fail. Every value VEIN derived from first principles was wrong in the
+//  same direction: too fast, too confident, too early to commit.
+//
+//  That direction is not an accident. Every failure mode in this game is a
+//  variant of "moved too fast": jamming a drill, overshooting a waypoint,
+//  wedging in a shaft, latching a connector while still drifting. There is no
+//  failure mode called "moved too slowly". So rather than ship another guess,
+//  the ship measures itself.
+//
+//  ---------------------------------------------------------------------------
+//  THE SAFETY RULE, which everything here obeys:
+//
+//      Adaptation may only ever make the ship MORE cautious than configured.
+//      Never less.
+//
+//  Your configured value is a ceiling, not a target. A loop that can talk itself
+//  into going faster is a loop that can talk itself into a crater, and an
+//  adaptive controller wrapped around an untested one has no business being
+//  optimistic. The worst case here is a ship that mines slowly.
+//  ---------------------------------------------------------------------------
+// ============================================================================
+
+/// <summary>Recompute the live values. Cheap; called once per tick.</summary>
+void UpdateAdaptive()
+{
+    // Configured values are ceilings. If the operator lowers one below what the
+    // ship had learned, respect it immediately.
+    if (learnedDrillSpeed <= 0 || learnedDrillSpeed > drillSpeed) learnedDrillSpeed = drillSpeed;
+    if (learnedBrakeDerate <= 0 || learnedBrakeDerate > BRAKE_DERATE) learnedBrakeDerate = BRAKE_DERATE;
+}
+
+// ---------------------------------------------------------------------------
+//  DRILL SPEED
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// The drills jammed. Back off hard and stay backed off for a while.
+///
+/// Asymmetric on purpose: a stall costs a back-out, a retry, and sometimes a
+/// blacklisted cell, whereas cutting slightly slower than optimal costs a few
+/// seconds. Punish stalls sharply and recover gently.
+/// </summary>
+void OnDrillStall()
+{
+    learnedDrillSpeed = Math.Max(DRILL_SPEED_FLOOR, learnedDrillSpeed * 0.7);
+    cleanCutTicks = 0;
+    drillStalls++;
+    Log("Drill speed -> " + Fmt(learnedDrillSpeed, 2) + " m/s after stall");
+}
+
+/// <summary>
+/// Called each tick while actually cutting rock and making progress. Recovers
+/// toward the configured ceiling slowly — roughly a percent per five seconds of
+/// clean cutting, so it takes a sustained good run to undo one stall.
+/// </summary>
+void OnCleanCut()
+{
+    cleanCutTicks++;
+    if (cleanCutTicks < 30) return;          // ~5 s at Update10
+    cleanCutTicks = 0;
+
+    if (learnedDrillSpeed >= drillSpeed) return;
+    learnedDrillSpeed = Math.Min(drillSpeed, learnedDrillSpeed * 1.03);
+}
+
+const double DRILL_SPEED_FLOOR = 0.15;
+
+// ---------------------------------------------------------------------------
+//  BRAKING
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Watch an approach for overshoot, and tighten the braking derate if we find
+/// any.
+///
+/// Overshoot is the honest signal: the controller predicted it could stop in the
+/// remaining distance and it could not. Causes vary — thruster spool-up, server
+/// tick rate, mass changing mid-approach — and none are worth modelling
+/// separately when the outcome is directly observable.
+///
+/// This only ever tightens. Nothing here can decide the ship may brake later.
+/// </summary>
+void TrackBraking()
+{
+    if (!flightActive || controller == null) { brakeWatchArmed = false; return; }
+
+    // Only interested in approaches we are actually trying to stop at, and only
+    // once moving fast enough for an overshoot to mean anything.
+    if (distToTarget > 200.0 || speed < 3.0)
+    {
+        if (brakeWatchArmed && distToTarget > brakeClosest + 8.0) brakeWatchArmed = false;
+        return;
+    }
+
+    if (!brakeWatchArmed)
+    {
+        brakeWatchArmed = true;
+        brakeClosest = distToTarget;
+        return;
+    }
+
+    if (distToTarget < brakeClosest) { brakeClosest = distToTarget; return; }
+
+    // Distance is growing again. If it has grown appreciably while we were still
+    // carrying speed, we sailed past the mark.
+    double overshoot = distToTarget - brakeClosest;
+    if (overshoot < Math.Max(3.0, shipRadius * 0.5)) return;
+
+    brakeWatchArmed = false;
+    brakeOvershoots++;
+    learnedBrakeDerate = Math.Max(BRAKE_DERATE_FLOOR, learnedBrakeDerate * 0.9);
+    Log("Overshot by " + Fmt(overshoot, 1) + "m — braking derate -> "
+        + Fmt(learnedBrakeDerate, 2));
+}
+
+const double BRAKE_DERATE_FLOOR = 0.25;
+
+/// <summary>One-line summary for the displays. Adaptation you cannot see is
+/// indistinguishable from a bug, which is much of why SCAM reads as fiddly.</summary>
+string AdaptiveStatus()
+{
+    if (drillStalls == 0 && brakeOvershoots == 0) return "nominal";
+    return "drill " + Fmt(learnedDrillSpeed, 2) + " (" + drillStalls + " stalls), brake "
+         + Fmt(learnedBrakeDerate, 2) + " (" + brakeOvershoots + " over)";
+}
+#endregion
+
+#region 21_Airspace.cs
+// ============================================================================
+//  AIRSPACE LOCKS
+//
+//  Taken from SCAM, which asks a dispatcher for a named section, waits in a FIFO
+//  queue if somebody holds it, and releases when done. Leases and locks are
+//  orthogonal and were conflated here for a long time:
+//
+//      a LEASE answers  "who owns this work"
+//      a LOCK  answers  "who may occupy this space"
+//
+//  VEIN already had expiring leases and no spatial exclusion at all. SCAM has
+//  locks that never expire — which is exactly why it ships a manual purge
+//  command for the deadlocks that produces. Doing both, with expiry on the lock
+//  as well, is strictly better than either.
+//
+//  Sections are blocks of cells rather than one lock over the whole site. One
+//  global lock would serialise the fleet down to a single working drone; per
+//  cell would be pointless, because the lease already guarantees no two drones
+//  are assigned the same shaft. What actually collides is the shared airspace
+//  drones descend and climb through, so that is what gets carved up.
+// ============================================================================
+
+/// <summary>Cells per side of a lock section.</summary>
+const int SECTION_CELLS = 4;
+
+/// <summary>Name of the section containing a cell. Kept short — it goes on the wire.</summary>
+string SectionFor(int cellIdx)
+{
+    if (cellIdx < 0 || job.Width <= 0) return "g";
+    return "s" + (CellCol(cellIdx) / SECTION_CELLS) + "_" + (CellRow(cellIdx) / SECTION_CELLS);
+}
+
+// ---------------------------------------------------------------------------
+//  MINER SIDE
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Do we hold the airspace for the cell we are about to work?
+///
+/// Solo miners hold everything by definition. Fleet miners ask and wait; the
+/// caller holds station meanwhile rather than committing to a descent.
+/// </summary>
+bool HoldsAirspaceFor(int cellIdx)
+{
+    if (!HasDispatcher) return true;
+
+    string want = SectionFor(cellIdx);
+    if (heldLock == want) return true;
+
+    // Holding the wrong one — release before asking for another, or the
+    // dispatcher's table and ours disagree about what we own.
+    if (heldLock.Length > 0 && heldLock != want) { ReleaseAirspace(); return false; }
+
+    if (!awaitingLock || tick - lockAskedTick > 120)
+    {
+        IGC.SendUnicastMessage(dispatcherAddr, igcChannel, "KA|" + want);
+        awaitingLock = true;
+        lockAskedTick = tick;
+    }
+    return false;
+}
+
+void ReleaseAirspace()
+{
+    if (heldLock.Length == 0) return;
+    if (HasDispatcher)
+        IGC.SendUnicastMessage(dispatcherAddr, igcChannel, "KR|" + heldLock);
+    heldLock = "";
+    awaitingLock = false;
+}
+
+void OnLockGranted(string section)
+{
+    heldLock = section;
+    awaitingLock = false;
+}
+
+// ---------------------------------------------------------------------------
+//  DISPATCHER SIDE
+// ---------------------------------------------------------------------------
+
+void OnLockRequest(long src, string section)
+{
+    long owner;
+    if (lockOwner.TryGetValue(section, out owner))
+    {
+        if (owner == src) { GrantLock(src, section); return; }   // already theirs
+
+        List<long> q;
+        if (!lockQueue.TryGetValue(section, out q)) { q = new List<long>(); lockQueue[section] = q; }
+        if (!q.Contains(src)) q.Add(src);
+        return;
+    }
+
+    lockOwner[section] = src;
+    lockExpiry[section] = tick + (long)(LOCK_TIMEOUT_S / Math.Max(dt, 0.01));
+    GrantLock(src, section);
+}
+
+void OnLockRelease(long src, string section)
+{
+    long owner;
+    if (!lockOwner.TryGetValue(section, out owner) || owner != src) return;
+
+    lockOwner.Remove(section);
+    lockExpiry.Remove(section);
+    PromoteNextWaiter(section);
+}
+
+void GrantLock(long to, string section)
+{
+    IGC.SendUnicastMessage(to, igcChannel, "KG|" + section);
+}
+
+/// <summary>Hand a freed section to whoever has been waiting longest.</summary>
+void PromoteNextWaiter(string section)
+{
+    List<long> q;
+    if (!lockQueue.TryGetValue(section, out q) || q.Count == 0) return;
+
+    long next = q[0];
+    q.RemoveAt(0);
+    lockOwner[section] = next;
+    lockExpiry[section] = tick + (long)(LOCK_TIMEOUT_S / Math.Max(dt, 0.01));
+    GrantLock(next, section);
+}
+
+/// <summary>
+/// Reclaim sections whose holder has gone quiet.
+///
+/// This is the part SCAM lacks. Its locks are held until released, so a drone
+/// destroyed mid-shaft blocks that airspace permanently and the only remedy is
+/// an operator typing a purge command. A lock is a timed loan, exactly like a
+/// lease.
+/// </summary>
+void ExpireAirspaceLocks()
+{
+    if (lockOwner.Count == 0) return;
+
+    lockScratch.Clear();
+    foreach (var kv in lockExpiry)
+        if (tick >= kv.Value) lockScratch.Add(kv.Key);
+
+    for (int i = 0; i < lockScratch.Count; i++)
+    {
+        string section = lockScratch[i];
+        Log("Airspace lock " + section + " expired — reissuing");
+        lockOwner.Remove(section);
+        lockExpiry.Remove(section);
+        PromoteNextWaiter(section);
+    }
+}
+
+/// <summary>Drop everything a departing drone was holding or queued for.</summary>
+void PurgeDroneLocks(long addr)
+{
+    lockScratch.Clear();
+    foreach (var kv in lockOwner) if (kv.Value == addr) lockScratch.Add(kv.Key);
+
+    for (int i = 0; i < lockScratch.Count; i++)
+    {
+        lockOwner.Remove(lockScratch[i]);
+        lockExpiry.Remove(lockScratch[i]);
+        PromoteNextWaiter(lockScratch[i]);
+    }
+
+    foreach (var kv in lockQueue) kv.Value.Remove(addr);
+}
+
+/// <summary>Operator escape hatch. SCAM has one and needs it; expiry means this
+/// should never be necessary, which is exactly why it is worth keeping.</summary>
+void PurgeAllLocks()
+{
+    lockOwner.Clear();
+    lockExpiry.Clear();
+    lockQueue.Clear();
+    Log("All airspace locks purged");
+}
+
+const double LOCK_TIMEOUT_S = 180.0;
 #endregion
 

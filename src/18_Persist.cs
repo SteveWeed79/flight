@@ -66,6 +66,12 @@ string SerializeState()
          .Append('\n');
     }
 
+    b.Append("A|").Append(EncD(learnedDrillSpeed))
+     .Append('|').Append(EncD(learnedBrakeDerate))
+     .Append('|').Append(drillStalls)
+     .Append('|').Append(brakeOvershoots)
+     .Append('\n');
+
     if (homeDockSet && homeDock != null)
     {
         b.Append("D|").Append(EncV(homeDock.Position))
@@ -124,6 +130,14 @@ void LoadState()
                 case "P":
                     if (!versionOk || f.Length < 4) break;
                     path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), new float[0], (float)DecD(f[3])));
+                    break;
+
+                case "A":
+                    if (!versionOk || f.Length < 5) break;
+                    learnedDrillSpeed = DecD(f[1]);
+                    learnedBrakeDerate = DecD(f[2]);
+                    drillStalls = ParseInt(f[3], 0);
+                    brakeOvershoots = ParseInt(f[4], 0);
                     break;
 
                 case "D":

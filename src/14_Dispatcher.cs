@@ -23,6 +23,7 @@ void TickDispatcher()
     if (tick % 30 == 0) SendBeacon();
 
     ExpireLeases();
+    ExpireAirspaceLocks();
     ExpireDrones();
 }
 
@@ -87,6 +88,7 @@ void ExpireDrones()
                 dockSlotOwner.Remove(r.DockSlot);
         }
 
+        PurgeDroneLocks(addr);
         fleet.Remove(addr);
     }
 
