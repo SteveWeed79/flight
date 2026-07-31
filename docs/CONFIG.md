@@ -32,15 +32,24 @@ this is a second line of defence rather than the primary one.
 | `holeOrder` | `Prospect` | `Serpentine` — corner to corner, least travel. `Spiral` — outward from centre. `Prospect` — survey, then chase the ore. |
 | `eject` | `Stone` | `Off`, `Stone`, or `StoneAndIce`. Needs an ejector or a connector in Throw Out mode. |
 | `shaftOverlap` | `0.15` | Fraction by which adjacent shafts overlap. Higher clears more rock and digs more holes. |
-| `drillSpeed` | `1.2` | m/s downward while cutting. |
+| `drillSpeed` | `0.8` | m/s downward while cutting. Starting point when `adaptiveDrill` is on. |
 | `retreatSpeed` | `3.0` | m/s backing out of a shaft. |
 | `cruiseSpeed` | `40.0` | m/s ceiling along the recorded route. |
-| `dockSpeed` | `1.5` | m/s on final dock approach. |
+| `dockSpeed` | `0.8` | m/s on final dock approach. |
 | `cargoFullAt` | `0.92` | Return home at this cargo fill fraction. |
 | `drillOnRetreat` | `false` | Keep drills running on the way up. Widens the shaft, costs time. |
+| `adaptiveDrill` | `true` | Learn the cutting speed this hull can actually hold. |
 
-**`drillSpeed` is the setting most worth tuning.** Above roughly 2 m/s the drills
-stop keeping up with the hull and the ship wedges. If it jams often, lower it.
+**`drillSpeed` is a starting point, not a fixed speed.** With `adaptiveDrill` on
+— the default — the ship measures how fast the hole is actually deepening against
+how fast it was told to descend, backs off hard when the drills fall behind, and
+creeps up while they are keeping cleanly ahead. It stays between a quarter and
+2.5x of this value, so the setting still bounds the outcome. Watch the `Learn`
+line on the display to see where it has settled; `learn reset` starts it over
+after a refit. Turn `adaptiveDrill` off to use this number exactly.
+
+Above roughly 2 m/s the drills stop keeping up with the hull and the ship wedges,
+which is what the adaptation is looking for. If it jams often anyway, lower this.
 
 **`cruiseSpeed` is a ceiling, not a target.** Actual speed is capped by whatever
 the ship can genuinely stop from given its mass and the local gravity.
@@ -59,6 +68,8 @@ majority of what a drill picks up and hauling it home is pure waste.
 | `barrenThreshold` | `0.8` | kg of ore per metre below which a cell is written off. |
 | `useOreDetectorMod` | `true` | Auto-detect the Ore Detector Raycast mod. Harmless if absent. |
 | `oreScanRange` | `500.0` | Metres the modded detector rays reach. |
+| `growToOre` | `true` | Extend the grid when the ore is still rich at its edge instead of calling the job done. Prospect order only. |
+| `growLimit` | `400` | Most cells the job may grow to. `400` is a 20x20 site. |
 
 **`probeDepth` must reach the ore layer.** If ore on your planet starts at 20 m
 and you probe to 12 m, every probe reports barren and the script concludes the
@@ -76,12 +87,15 @@ large site you want a rough picture of quickly.
 |---|---|---|
 | `minBattery` | `0.30` | Head home below this battery fraction. |
 | `minHydrogen` | `0.25` | Head home below this hydrogen fraction. |
-| `resumeBattery` | `0.95` | Resume work above this. |
+| `resumeBattery` | `0.80` | Resume work above this. |
 | `resumeHydrogen` | `0.90` | Resume work above this. |
 | `liftSafetyFactor` | `0.80` | Fraction of measured lift the ship is willing to spend. |
 | `transitAltitude` | `25.0` | Metres above the job plane when crossing the site. |
 | `stateTimeout` | `240.0` | Seconds before the watchdog calls a state hung. `0` disables it. |
+| `minUranium` | `2.0` | Head home below this many kg of uranium across all reactors. Ignored with no reactors; `0` disables. |
 | `stopOnDamage` | `false` | Return home if blocks take damage mid-job. |
+| `adaptiveBraking` | `true` | Learn the braking derate from how much authority approaches actually demand. |
+| `brakeDerate` | `0.60` | Fraction of the theoretical `sqrt(2ad)` stopping speed used. Starting point when `adaptiveBraking` is on, fixed value when it is off. |
 
 Resume thresholds below their matching abort thresholds would trap the ship in a
 dock/undock loop forever, so they are quietly corrected upward on load.
@@ -92,6 +106,14 @@ ever struggles on the climb home.
 
 **`stateTimeout = 0` disables the watchdog**, which is rarely what you want. The
 watchdog is the main reason the script recovers on its own.
+
+**`brakeDerate` is the margin on `sqrt(2ad)`.** The formula is exact for an ideal
+actuator and optimistic for a real one: thrusters ramp rather than snapping to
+full output, tick rate varies, and mass climbs while the hold fills. With
+`adaptiveBraking` on, the ship watches how much of its braking authority
+approaches genuinely demand and moves this figure to suit itself, between 0.30
+and 0.85. Lower is slower and safer. For reference, PAM ships 0.70 and SCAM
+0.50 — and neither number is derived from anything but watching ships.
 
 ---
 
@@ -104,9 +126,24 @@ Only meaningful with a dispatcher.
 | `droneTimeout` | `30.0` | Seconds of silence before a drone is presumed lost and its shaft reissued. |
 | `laneSpacing` | `12.0` | Metres between drone altitude lanes over the site. |
 | `dockSlots` | `1` | Dispatcher only: how many connectors are available for unloading. |
+| `airspaceLock` | `true` | One drone at a time in the airspace over the site, granted by the dispatcher with a queue behind it. |
+| `lockPatience` | `60.0` | Seconds a drone waits for the airspace before going anyway. Capped at half `stateTimeout`. |
 
 **`laneSpacing` must comfortably exceed the tallest drone's height.** Lanes are
-what stop two drones occupying the same airspace over the site.
+formation, not exclusion: they stop two drones cruising at the same height, and
+that is all they do. `airspaceLock` is what actually stops two drones wanting the
+same place at the same time.
+
+**`airspaceLock` is worth leaving on.** A drone asks the dispatcher before
+crossing the site and waits its turn if somebody else is out there — inside its
+own shaft, if it is on the way up, because that is the one volume nobody else can
+be sent to. Locks expire on silence and on a hard timeout, so a drone that
+explodes holding one does not stall the deposit. `purge` releases everything by
+hand if it ever comes to that.
+
+**`lockPatience` is a safety valve, not a tuning knob.** A dispatcher that stops
+answering must not be able to park the whole fleet in mid-air, so a drone that
+has waited this long proceeds on lanes alone and says so in the log.
 
 ---
 

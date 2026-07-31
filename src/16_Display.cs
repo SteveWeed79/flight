@@ -117,6 +117,15 @@ void RenderMiner()
 
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 
+    // Anything the ship has decided for itself gets shown. An adaptive value you
+    // cannot see is indistinguishable from a bug.
+    string learned = LearningSummary();
+    if (learned.Length > 0) sb.Append("Learn  ").Append(learned).Append('\n');
+
+    if (airspaceLock && HasDispatcher)
+        sb.Append("Air    ").Append(heldLock.Length > 0 ? "holding " + heldLock
+                  : (wantLock.Length > 0 ? "queued for " + wantLock : "clear")).Append('\n');
+
     if (flightActive)
         sb.Append("Nav    ").Append(Fmt(distToTarget, 1)).Append("m  ")
           .Append(Fmt(speed, 1)).Append("m/s  err ")
@@ -141,6 +150,7 @@ void RenderDispatcher()
     else sb.Append("No job set.\n");
 
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
+    sb.Append("Air    ").Append(AirspaceStatus()).Append('\n');
     sb.Append('\n');
 
     foreach (var kv in fleet)

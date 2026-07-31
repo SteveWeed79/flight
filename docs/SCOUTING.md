@@ -181,9 +181,16 @@ X done   ! stuck  o busy    @ current shaft
 ```
 
 If the `#` marks cluster at one edge, your job rectangle is in the wrong place.
-Fly there, run `job here`, and the grid re-anchors around the ore.
+With `growToOre` on — the default — the script notices this for you: when it runs
+out of work it checks each edge, and any edge that is still producing gets two
+more rows or columns rather than a "job complete". You can still fly there and
+run `job here` to re-anchor the whole grid, which is faster if the ore turned out
+to be somewhere else entirely rather than merely further along.
 
 **When it says the job is complete but the site looks untouched**, it surveyed
-and concluded there was nothing worth digging. Check `probeDepth` first, then
+and concluded there was nothing worth digging. That verdict now includes the
+edges: the job only ends once the boundary cells have been drilled and come back
+below `barrenThreshold`, so "complete" means the ore stopped, not that the
+rectangle ran out. Check `probeDepth` first, then
 `barrenThreshold`. `reset` clears the survey and starts over without losing your
 recorded route.

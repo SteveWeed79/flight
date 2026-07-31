@@ -52,7 +52,7 @@ void TickMiner()
 
 void StIdle(bool entry)
 {
-    if (entry) { SafeStop(); statusLine = "Idle"; }
+    if (entry) { SafeStop(); ReleaseAirspace(); statusLine = "Idle"; }
     if (!jobRunning || jobComplete) return;
 
     Health h = CheckReadiness();
@@ -204,11 +204,24 @@ void StApproaching(bool entry)
 
     int col = CellCol(activeCell), row = CellRow(activeCell);
 
-    // Approach at our own altitude lane so two drones crossing the site are
-    // never at the same height. Cheap, and it removes the entire class of
-    // mid-air collisions that swarm scripts are notorious for.
+    // Cruise in our own altitude lane, so drones crossing the site are stacked
+    // rather than nose to nose. Lanes are formation, though, not exclusion —
+    // that is the lock's job, below.
     double standoff = transitAltitude + myLane;
     Vector3D above = job.CellMouth(col, row, standoff);
+
+    // One drone in the shared airspace at a time. Wait where we are, squared up
+    // and at our lane height, rather than improvising a hold pattern: when the
+    // lock arrives we want to already be pointing the right way.
+    if (!AcquireAirspace(LOCK_SITE))
+    {
+        statusLine = "Waiting for airspace";
+        if (lockHoldPoint == Vector3D.Zero) lockHoldPoint = shipPos;
+        FlyTo(lockHoldPoint, cruiseSpeed * 0.25);
+        Orient(job.Down, job.Forward);
+        return;
+    }
+    lockHoldPoint = Vector3D.Zero;
 
     FlyTo(ControllerTargetFor(above), cruiseSpeed * 0.5);
     Orient(job.Down, job.Forward);
@@ -282,6 +295,11 @@ void StDescending(bool entry)
     shaftDepth = CurrentShaftDepth(col, row);
     if (shaftDepth > shaftMaxDepth) shaftMaxDepth = shaftDepth;
 
+    // Committed to the hole. Nobody else can want this volume now, so hand the
+    // shared airspace on rather than sit on it for the length of a deep shaft.
+    // SCAM does the same thing at the same moment and for the same reason.
+    if (shaftDepth > 1.0 && heldLock.Length > 0) ReleaseAirspace();
+
     // First material back means we have reached the real surface. On a planet
     // that is within a metre of the job plane and this barely matters; on an
     // asteroid the surface wanders tens of metres either side of it, and
@@ -295,7 +313,12 @@ void StDescending(bool entry)
     // Drop fast through the air, then slow down and switch on at the rock.
     bool inRock = shaftDepth > -2.0;
     SetDrills(inRock);
-    double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
+    double cutSpeed = DrillSpeedNow();
+    double descentSpeed = inRock ? cutSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
+
+    // Only learn from ground we are genuinely cutting. Above the surface the
+    // ship is in free air and would teach the model that it can cut at 6 m/s.
+    UpdateDrillLearning(inRock && shaftContactDepth >= 0, shaftDepth, cutSpeed);
 
     // ---- Stop conditions, most urgent first --------------------------------
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
@@ -310,6 +333,9 @@ void StDescending(bool entry)
     if (inRock && IsStuck())
     {
         stuckRetries++;
+        // A jam is the strongest evidence there is that the commanded cutting
+        // speed is wrong for this hull. Much stronger than a slow tick.
+        PenaliseDrillSpeed();
         if (stuckRetries > 3) { AbandonShaft(ShaftResult.Stuck); return; }
 
         Log("Stuck at " + Fmt(shaftDepth, 1) + "m, backing off (" + stuckRetries + "/3)");
@@ -352,10 +378,25 @@ void StAscending(bool entry)
     double standoff = transitAltitude + myLane;
     Vector3D clearOfHole = job.CellMouth(col, row, standoff);
 
+    // Ask for the airspace on the way up rather than on arrival at the top, so
+    // the queue is working while we climb and the common case costs nothing.
+    bool clear = AcquireAirspace(LOCK_SITE);
+
     // Climb the shaft axis exactly. Any lateral drift on the way up and the ship
     // wedges itself against the wall it just cut.
+    double exitDepth = Math.Max(0, depth - 6.0);
+
+    // Without the lock, stop just short of the mouth. This is SCAM's
+    // WaitingForLockInShaft, and the choice of place is the whole point: our own
+    // shaft is the one volume nobody else can be granted.
+    if (!clear)
+    {
+        exitDepth = Math.Max(exitDepth, 2.0);
+        statusLine = "Holding in shaft — airspace busy";
+    }
+
     Vector3D exitPoint = depth > 1.0
-        ? job.CellDepth(col, row, Math.Max(0, depth - 6.0))
+        ? job.CellDepth(col, row, exitDepth)
         : clearOfHole;
 
     FlyTo(ControllerTargetFor(exitPoint), retreatSpeed);
@@ -456,6 +497,10 @@ void StInbound(bool entry)
         statusLine = "Returning";
         SetDrills(false);
         BeginPath(false);
+        // Off the site and onto the recorded route, which everyone shares and
+        // which the lanes exist to separate. Holding the site lock all the way
+        // home would serialise the whole fleet for no benefit.
+        ReleaseAirspace();
         if (HasDispatcher) RequestDock();
     }
 

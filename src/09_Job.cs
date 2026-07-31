@@ -114,8 +114,20 @@ int SelectNextCell()
 /// Choose the next shaft, measuring travel from <paramref name="origin"/>.
 /// The dispatcher passes the requesting drone's position so that work is handed
 /// to whoever is closest to it, rather than to whoever asked first.
+///
+/// Nothing left is not necessarily the end. If the survey says the ore is still
+/// rich where the grid stops, the grid is in the wrong place — so grow it and
+/// ask again.
 /// </summary>
 int SelectNextCell(Vector3D origin)
+{
+    int idx = PickCell(origin);
+    if (idx >= 0) return idx;
+    if (!GrowJobTowardOre()) return -1;
+    return PickCell(origin);
+}
+
+int PickCell(Vector3D origin)
 {
     selectionOrigin = origin;
     if (cells.Length != job.CellCount) RebuildCells();
@@ -384,6 +396,113 @@ double SightingBonus(int col, int row)
         bonus += 25.0 / (1.0 + lat);
     }
     return bonus;
+}
+
+// ---------------------------------------------------------------------------
+//  GROWING THE JOB
+//
+//  PAM's rectangle matches nothing in particular; SCAM's circular generations
+//  match a spherical deposit and nothing else. Both make you guess the shape of
+//  the ore before you have seen any of it, and both then dig exactly the region
+//  you guessed.
+//
+//  With a yield map the question stops existing. If the cells along an edge of
+//  the job are still producing when the job runs out of work, the deposit
+//  carries on past the boundary and the boundary was arbitrary. Extend it that
+//  way and let the deposit's real shape emerge from what was measured.
+// ---------------------------------------------------------------------------
+
+/// <summary>Cells added to an edge that is still rich.</summary>
+const int GROW_STEP = 2;
+
+/// <summary>
+/// Extend the grid toward ore that runs off the edge of it.
+/// </summary>
+/// <returns>True if the grid changed, in which case indices have moved.</returns>
+bool GrowJobTowardOre()
+{
+    if (!growToOre || !job.IsSet || cells.Length == 0) return false;
+    // Only the prospector has a map to grow from. Serpentine and Spiral are
+    // "dig this rectangle" by definition and it would be rude to redefine them.
+    if (holeOrder != HoleOrder.Prospect) return false;
+    if (job.CellCount >= growLimit) return false;
+
+    // Cell indices are the fleet's shared vocabulary and they are about to
+    // change. Never while somebody is out there holding one.
+    for (int i = 0; i < cells.Length; i++)
+        if (cells[i].State == CellState.Leased) return false;
+
+    int dl = EdgeStillRich(0) ? GROW_STEP : 0;
+    int dr = EdgeStillRich(1) ? GROW_STEP : 0;
+    int dt = EdgeStillRich(2) ? GROW_STEP : 0;
+    int db = EdgeStillRich(3) ? GROW_STEP : 0;
+    if (dl + dr + dt + db == 0) return false;
+
+    int nw = job.Width + dl + dr;
+    int nh = job.Height + dt + db;
+    if (nw * nh > growLimit) return false;
+
+    // Keep every cell where it is in the world. Widening by dl on the left and
+    // dr on the right moves the centre by half their difference; the same on the
+    // other axis. Get this wrong and the whole survey slides off its own ground.
+    YieldCell[] grown = new YieldCell[nw * nh];
+    for (int i = 0; i < grown.Length; i++) grown[i] = new YieldCell();
+
+    for (int row = 0; row < job.Height; row++)
+        for (int col = 0; col < job.Width; col++)
+            grown[(row + dt) * nw + (col + dl)] = cells[row * job.Width + col];
+
+    job.Origin += job.Right * (job.Spacing * (dr - dl) * 0.5)
+                + job.Forward * (job.Spacing * (db - dt) * 0.5);
+    job.Width = nw;
+    job.Height = nh;
+    cells = grown;
+
+    // The new ground is unsurveyed, so the probe pass has work again.
+    probePassDone = false;
+    activeCell = -1;
+    scoreCursor = 0;
+
+    Log("Ore continues past the edge — job grown to " + nw + "x" + nh);
+    if (role == Role.Dispatcher) SendBeacon();
+    return true;
+}
+
+/// <summary>
+/// Is the ore still worth having along one edge of the grid?
+///
+/// Judged on total kilograms over total metres across the whole edge rather than
+/// cell by cell, so one lucky hole cannot grow the site on its own and one dry
+/// hole in a good seam cannot stop it.
+/// </summary>
+bool EdgeStillRich(int side)
+{
+    double ore = 0, metres = 0;
+    int sampled = 0;
+
+    int count = (side < 2) ? job.Height : job.Width;
+    for (int i = 0; i < count; i++)
+    {
+        int col, row;
+        if (side == 0) { col = 0; row = i; }
+        else if (side == 1) { col = job.Width - 1; row = i; }
+        else if (side == 2) { col = i; row = 0; }
+        else { col = i; row = job.Height - 1; }
+
+        YieldCell c = cells[job.IndexOf(col, row)];
+        if (c.MetresDrilled < 0.5f) continue;
+        // Ground we could not physically reach says nothing about the ore.
+        if (c.State == CellState.Blocked) continue;
+
+        ore += c.OreKg;
+        metres += c.MetresDrilled;
+        sampled++;
+    }
+
+    // One hole is an anecdote. Demand at least two, so a single probe on a
+    // corner cannot walk the job across the map.
+    if (sampled < 2 || metres < 1.0) return false;
+    return ore / metres >= barrenThreshold;
 }
 
 int RichCellCount()

@@ -96,7 +96,7 @@ Name any LCD with `[VEIN]` in it and the script will use it. The Programmable
 Block's own screen is used automatically.
 
 ```
-VEIN 1.0.0  Miner  [solo]
+VEIN 1.1.0  Miner  [solo]
 ----------------------------------------
 Descending — Drilling [3,2]
 Cargo  [########----] 67%  4.2t ore
@@ -106,6 +106,7 @@ Shaft  [3,2]  18.4/40m
 Job    5x5 @40m  32% done, 17 left
 Lift   118.4t of 142.0t
 Scout  probe map (no ore mod)
+Learn  cut 1.06m/s  brake 0.68 (31)
 Nav    2.1m  1.2m/s  err 1deg
 Load   23% of tick budget
 
@@ -153,6 +154,11 @@ The usual answers are no job set (`job set 5 5 40`) or no route recorded
 **"Too heavy for the route"** — the ship cannot lift its own current mass over the
 worst point of the recorded route. Unload it, or lower `liftSafetyFactor`, or
 record a route that does not climb as steeply.
+
+The `Learn` line is what the ship has worked out about itself: the cutting speed
+it can actually hold, and the fraction of its braking authority it is willing to
+spend, with the number of approaches that fed the second one. Both move on their
+own. `learn reset` puts them back to the configured values after a refit.
 
 **It jams in shafts.** Lower `drillSpeed`. Above about 2 m/s the drills stop
 keeping up with the hull and you wedge. On a light ship, 0.8 is not unreasonable.

@@ -24,6 +24,7 @@ void TickDispatcher()
 
     ExpireLeases();
     ExpireDrones();
+    ExpireAirspaceLocks();
 }
 
 /// <summary>
@@ -88,6 +89,10 @@ void ExpireDrones()
         }
 
         fleet.Remove(addr);
+
+        // Airspace last, because promoting the next drone in the queue must skip
+        // anyone already forgotten, and this one is now forgotten.
+        ReleaseLocksOf(addr);
     }
 
     // Lanes are handed out by join order, so a departure leaves a gap. Repack so
@@ -103,6 +108,31 @@ void RepackLanes()
         kv.Value.Lane = i * laneSpacing;
         i++;
     }
+}
+
+/// <summary>
+/// The fleet record for an address, created if this is the first we have heard
+/// of it.
+///
+/// Anything a drone sends counts as a sign of life, not just its heartbeat. A
+/// drone that asks for airspace before its first heartbeat has landed would
+/// otherwise be granted a section and have it reclaimed on the same tick for
+/// being an unknown drone — a grant/revoke flap that is very hard to read from
+/// the outside.
+/// </summary>
+DroneRecord DroneFor(long addr)
+{
+    DroneRecord r;
+    if (!fleet.TryGetValue(addr, out r))
+    {
+        r = new DroneRecord();
+        r.Address = addr;
+        // Stack new arrivals into their own altitude band.
+        r.Lane = fleet.Count * laneSpacing;
+        fleet[addr] = r;
+    }
+    r.LastSeenTick = tick;
+    return r;
 }
 
 // ---------------------------------------------------------------------------

@@ -58,9 +58,9 @@ The parts worth stealing:
 - **Dispatcher and drones.** A base brain owns the work; drones own nothing but
   their current task. Drones become disposable, which is the correct property for
   something you are flying into rock.
-- **Real concurrency on one deposit,** via a named-section mutex. This is worth
-  spelling out, because it is better than what VEIN does. Drones ask the
-  dispatcher for a named lock over IGC:
+- **Real concurrency on one deposit,** via a named-section mutex. Worth spelling
+  out in full, because it was better than anything VEIN had and is now what VEIN
+  uses. Drones ask the dispatcher for a named lock over IGC:
 
   ```
   common-airspace-ask-for-lock:<section>     agent -> dispatcher
@@ -154,9 +154,10 @@ That is experience, not laziness, and VEIN's watchdog is the same instinct.
 
 ## How to improve on both
 
-Ranked by value per line. The ordering matters more than the list.
+Ranked by value per line when this list was written. All four are now
+implemented; the ordering is kept because it is the argument, not a changelog.
 
-### 1. Measure the constants instead of shipping them
+### 1. Measure the constants instead of shipping them — *done, 1.1*
 
 This follows directly from the asymmetry above and is the strongest idea
 available. If two experienced authors had to *discover* 0.6 m/s by watching
@@ -170,24 +171,58 @@ right move is to ship no number at all:
   happened and correct the ratio. The ship learns its own thrust lag and its
   server's tick rate.
 
-VEIN already does exactly this for hydrogen consumption. Extending it to the two
-constants responsible for most of its early mistakes is the single highest-value
+VEIN already did exactly this for hydrogen consumption. Extending it to the two
+constants responsible for most of its early mistakes was the single highest-value
 change available, and **neither ancestor does it at all.**
+
+The measurements, in `20_Adaptive.cs`:
+
+- **Cutting speed** compares how fast the hole is deepening against how fast the
+  ship was told to descend. Below 35% of command, back off 15% at once; a jam
+  costs 30%. Above 75% for two seconds, creep up 1%. Asymmetric on purpose —
+  there is no failure mode called moved too slowly. Bounded to between a quarter
+  and 2.5× the configured `drillSpeed`, so the setting still means something.
+- **Braking derate** asks, at every moment of an approach, what fraction of the
+  deceleration the ship owns would be needed *right now* to stop exactly on the
+  target: `v² / (2·d·a)`. That is the number that crosses 1.0 immediately before
+  an overshoot. A ship tracking the commanded profile perfectly sits at
+  `derate²`; every effect the derate exists to cover shows up as demand above it.
+  Peak demand over 0.60 across an approach lowers the derate, under 0.35 raises
+  it, bounded to 0.30–0.85.
+
+Both are persisted, because they are properties of the hull and the server
+rather than of the job.
 
 The one rule: an adaptive value must be **visible and overridable**. Adaptation
 you cannot see is indistinguishable from a bug, which is a large part of why
-SCAM is considered fiddly.
+SCAM is considered fiddly. Both appear on the `Learn` line of the display, both
+have an `adaptive*` switch in Custom Data, and `learn reset` puts them back.
 
-### 2. Take SCAM's lock; keep VEIN's lease
+### 2. Take SCAM's lock; keep VEIN's lease — *done, 1.1*
 
 These are orthogonal and were conflated here for a long time. A **lease** answers
 *who owns this work*; a **lock** answers *who may occupy this space*. SCAM grants
 work permanently, so a dead drone's shaft is lost until somebody purges. VEIN
-expires leases on silence but has no spatial exclusion whatsoever. Both
+expired leases on silence but had no spatial exclusion whatsoever. Both
 mechanisms together is strictly better than either, and the absence of expiry is
 why SCAM needed a purge command in the first place.
 
-### 3. Let the survey choose the job's shape
+SCAM's protocol is taken as it stands — ask, grant, release, with a FIFO queue
+behind the section — and given the one thing it lacks. A lock now expires the
+same way a lease does: on silence from its holder, and on a hard ceiling equal to
+the watchdog timeout, at which point the section is revoked and handed to the
+queue. The holder is *told* it has been revoked rather than left to find out.
+
+The waiting behaviour is SCAM's too, including where the waiting happens. A drone
+that wants to cross the site holds station squared up at its lane height; a drone
+climbing out of a shaft **stops two metres short of the mouth** — that is SCAM's
+`WaitingForLockInShaft`, and the choice of place is the point. Its own shaft is
+the one volume nobody else can be granted.
+
+There is still a `purge` command. Expiry should make it unnecessary; "should" is
+not a thing to rely on at 2am.
+
+### 3. Let the survey choose the job's shape — *done, 1.1*
 
 PAM's rectangle matches nothing in particular. SCAM's circular generations match
 spherical deposits and nothing else. If shafts grow toward measured yield instead
@@ -195,7 +230,21 @@ of filling a predefined region, the question stops existing — the deposit's re
 shape emerges from the map. This is the strongest argument for auto-following the
 ore, and a better one than convenience.
 
-### 4. Keep the persistent map
+Implemented at the one moment it is unambiguous: when selection finds no work
+left. Before declaring the job finished, each edge of the grid is scored on total
+kilograms over total metres across that whole edge. Any edge still above
+`barrenThreshold` is extended by two cells, the origin is shifted to keep every
+existing cell exactly where it is in the world, and selection is asked again.
+Growth stops when the edges come back barren or `growLimit` cells is reached.
+
+Two constraints made this harder than it looks and are worth writing down. Cell
+indices are the fleet's shared vocabulary, so growing the grid renumbers
+everything — which is why growth is refused while any cell is leased, and why the
+new frame is broadcast before the next lease is granted. And the origin shift is
+`(dr − dl)/2` cells along each axis, not `dl`: get it wrong and the whole survey
+slides off the ground it was measured on.
+
+### 4. Keep the persistent map — *done, 1.0*
 
 The one thing neither ancestor has, and the thing that makes their strengths
 compose. SCAM's dispatcher has no *basis* on which to decide where to send
@@ -256,19 +305,21 @@ SCAM's dispatcher model is right. VEIN tightens the failure handling:
   cell is reissued.
 - **Drones are presumed dead on silence,** and everything they held — shaft,
   dock slot — is reclaimed.
-- **Altitude lanes.** Each drone gets its own height band over the site, so two
-  drones crossing never share an altitude. Lanes repack when a drone leaves, so
-  three drones use 0/1/2 rather than 0/3/7.
+- **A named-section mutex for the airspace over the site,** taken from SCAM, with
+  expiry added. One drone manoeuvres over the deposit at a time; the rest queue.
+  See item 2 above for the protocol and the reasoning.
+- **Altitude lanes, demoted to what they are good at.** Each drone still gets its
+  own height band, and lanes still repack when a drone leaves so three drones use
+  0/1/2 rather than 0/3/7 — but they are formation, not exclusion. Lanes stop two
+  drones sharing a height; they never stopped two drones wanting the same *place*
+  at that height, and they scale badly, since N drones need N distinct altitudes.
+  SCAM keeps a 12 m echelon offset *as well as* locks — the same figure VEIN
+  arrived at independently — which was the clue that lanes were a reasonable
+  formation device being misused as an exclusion mechanism.
 
-  **This is weaker than SCAM's answer and should eventually be replaced by it.**
-  Lanes stop two drones sharing a height; they do not stop two drones wanting
-  the same place at the same height, and they scale badly — N drones need N
-  distinct altitudes, which becomes absurd past a handful. A named-section mutex
-  with a wait queue costs no altitude at all and actually guarantees exclusion.
-  SCAM keeps an echelon offset *as well as* locks, at exactly the same 12 m VEIN
-  arrived at independently, which suggests lanes are a reasonable formation
-  device and a poor exclusion mechanism — which is precisely how they are being
-  misused here.
+  Four mechanisms, one job each: a **lease** says who owns the work, a **lock**
+  says who may occupy the airspace, a **lane** says what height you cruise at,
+  and a **slot** says which base connector is yours.
 - **Work goes to the nearest drone.** The dispatcher scores the site from the
   requesting drone's position, not from the base.
 - **Stale reports are rejected.** Only the drone currently holding a lease may
@@ -347,11 +398,14 @@ Worth being clear about, so nobody wastes an evening:
 
 | Symptom | Setting | Direction |
 |---|---|---|
-| Ship jams in shafts | `drillSpeed` | Lower. SCAM ships 0.6; above ~2 m/s the drills cannot keep up. |
+| Ship jams in shafts | `drillSpeed` | Lower. It is the ceiling the adaptive speed works under. SCAM ships 0.6; above ~2 m/s the drills cannot keep up. |
 | Too many dry holes | `probeStride` | Lower — survey more finely. |
 | Survey takes too long | `probeStride`, `probeDepth` | Raise stride, lower depth. |
 | Gives up on good ground | `barrenThreshold` | Lower. |
 | Fills up too fast | `eject` | `Stone` roughly triples time on site. |
 | Strands itself in gravity | `liftSafetyFactor` | Lower to 0.7 or below. |
-| Drones bump each other | `laneSpacing` | Raise above the tallest drone. |
+| Overshoots waypoints | `brakeDerate` | Lower, or leave `adaptiveBraking` on and let it find its own. |
+| Drones bump each other | `airspaceLock`, `laneSpacing` | Lock on first; lanes above the tallest drone. |
+| Fleet queues up single file | `airspaceLock` | Off trades exclusion for throughput. Lanes only, as before 1.1. |
+| Job keeps growing | `growToOre`, `growLimit` | Off pins the grid to what you asked for. |
 | "Script too complex" | `verboseEcho` off; smaller job grid | — |

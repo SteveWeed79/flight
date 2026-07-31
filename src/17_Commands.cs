@@ -93,6 +93,18 @@ void HandleCommand(string argument, bool allowRelay = true)
             }
             break;
 
+        case "purge":
+            // The escape hatch, and SCAM is right to ship one. Expiry should
+            // make it unnecessary; "should" is not a thing to rely on at 2am.
+            PurgeAirspace();
+            break;
+
+        // ---- Settings the ship worked out for itself -----------------------
+        case "learn":
+            if (a.Length > 1 && a[1] == "reset") ResetLearning();
+            else Log("Learned: " + LearningSummary());
+            break;
+
         // ---- Diagnostics ---------------------------------------------------
         case "status":
             Log(state + " / " + statusLine);
