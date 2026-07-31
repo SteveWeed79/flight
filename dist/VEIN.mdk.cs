@@ -2947,6 +2947,34 @@ namespace VEIN
             homeDockSet = true;
         }
 
+        /// <summary>
+        /// Re-anchor the dock without touching the rest of the route.
+        ///
+        /// The dock frame is otherwise a one-shot snapshot taken by StartRecording, so
+        /// repositioning a connector meant re-flying and re-recording the entire route
+        /// to change the last five metres of it. This re-takes the frame and waypoint
+        /// zero — the controller's position while mated — and leaves every other
+        /// waypoint exactly where it is.
+        ///
+        /// It re-anchors the approach, not the route. If the base moved far enough that
+        /// the recorded path no longer arrives near it, the path is wrong as well and
+        /// wants recording properly.
+        /// </summary>
+        void RecaptureDock()
+        {
+            CaptureHomeDock();
+
+            Waypoint w = new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift());
+            if (path.Count == 0) path.Add(w);
+            else path[0] = w;
+
+            // Both are derived from the waypoints and one of those just moved.
+            BuildPathDistances();
+            ComputeMaxFlyableMass();
+
+            Log("Dock re-anchored, " + path.Count + " waypoints kept");
+        }
+
         /// <summary>Called every tick while recording.</summary>
         void RecordTick()
         {
@@ -5472,7 +5500,7 @@ namespace VEIN
 
         void CmdRecord(string[] a)
         {
-            if (a.Length < 2) { Log("record start | stop | clear"); return; }
+            if (a.Length < 2) { Log("record start | stop | clear | dock"); return; }
 
             switch (a[1])
             {
@@ -5490,8 +5518,15 @@ namespace VEIN
                     maxFlyableMass = -1;
                     Log("Path cleared");
                     break;
+                case "dock":
+                    // Moving a connector should not cost you the whole route.
+                    if (!Docked) { Log("Not docked — 'record dock' captures a live mated frame"); return; }
+                    if (path.Count == 0) { Log("No route to re-anchor — use 'record start' first"); return; }
+                    RecaptureDock();
+                    break;
+
                 default:
-                    Log("record start | stop | clear");
+                    Log("record start | stop | clear | dock");
                     break;
             }
         }

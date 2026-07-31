@@ -199,6 +199,18 @@ concluded there was nothing worth digging. Check `probeDepth`, then
 **It will not dock.** The recorded dock position comes from waypoint zero, so
 `record start` must be run **while actually docked**. Re-record if in doubt.
 
+If you have only *moved the connector*, you do not need the whole route again.
+Dock at the new one and run:
+
+```
+record dock
+```
+
+That re-takes the dock frame and waypoint zero and keeps every other waypoint,
+which is what you want when a connector shifted a few blocks. It re-anchors the
+approach, not the route — if the base moved far enough that the recorded path no
+longer arrives near it, the path is wrong too and wants `record start` again.
+
 **"Script too complex."** Turn off `verboseEcho`, use a smaller job grid, or fewer
 LCDs. Watch the Load line — sustained above 80% is the warning sign.
 

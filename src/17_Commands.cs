@@ -163,7 +163,7 @@ void CmdReset()
 
 void CmdRecord(string[] a)
 {
-    if (a.Length < 2) { Log("record start | stop | clear"); return; }
+    if (a.Length < 2) { Log("record start | stop | clear | dock"); return; }
 
     switch (a[1])
     {
@@ -181,8 +181,15 @@ void CmdRecord(string[] a)
             maxFlyableMass = -1;
             Log("Path cleared");
             break;
+        case "dock":
+            // Moving a connector should not cost you the whole route.
+            if (!Docked) { Log("Not docked — 'record dock' captures a live mated frame"); return; }
+            if (path.Count == 0) { Log("No route to re-anchor — use 'record start' first"); return; }
+            RecaptureDock();
+            break;
+
         default:
-            Log("record start | stop | clear");
+            Log("record start | stop | clear | dock");
             break;
     }
 }
