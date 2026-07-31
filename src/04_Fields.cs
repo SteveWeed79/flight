@@ -28,6 +28,7 @@ readonly List<IMyThrust> thrusters = new List<IMyThrust>();
 readonly List<IMyShipDrill> drills = new List<IMyShipDrill>();
 readonly List<IMyCargoContainer> cargo = new List<IMyCargoContainer>();
 readonly List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
+readonly List<IMyReactor> reactors = new List<IMyReactor>();
 readonly List<IMyGasTank> hydrogenTanks = new List<IMyGasTank>();
 readonly List<IMyShipConnector> ejectors = new List<IMyShipConnector>();
 /// <summary>Surfaces that get plain monospace text — the PB's own screen.</summary>
@@ -151,6 +152,12 @@ double cargoFill;
 /// barely moves on a large ship when a few kilos of rock arrive.</summary>
 double cargoVolume;
 double batteryFill;
+/// <summary>Kilograms of uranium across all reactors. A reactor ship with no
+/// batteries reports full power forever, so this is its only fuel gauge.</summary>
+double uraniumKg;
+/// <summary>Fullest single inventory, 0..1. Aggregate fill hides the case where
+/// one drill is brimming and has stopped collecting while the rest sit empty.</summary>
+double peakInventoryFill;
 double hydrogenFill;
 /// <summary>kg of valuable ore aboard right now.</summary>
 double oreAboard;

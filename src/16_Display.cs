@@ -106,6 +106,9 @@ void RenderMiner()
         sb.Append('\n');
     }
 
+    if (reactors.Count > 0)
+        sb.Append("Uranium ").Append(Fmt(uraniumKg, 1)).Append("kg\n");
+
     if (hydroCalibrated)
     {
         sb.Append("Fuel   burn ").Append(Fmt(hydroPerMetre * 100000, 2))

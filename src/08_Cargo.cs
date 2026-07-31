@@ -18,6 +18,7 @@ const string SUB_ICE = "Ice";
 void SampleInventories()
 {
     double vol = 0, maxVol = 0;
+    peakInventoryFill = 0;
 
     for (int i = 0; i < cargo.Count; i++)
         AccumulateVolume(cargo[i].GetInventory(0), ref vol, ref maxVol);
@@ -55,11 +56,13 @@ void SampleInventories()
     hydrogenFill = tanks > 0 ? gas / tanks : 1.0;
 }
 
-static void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
+void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
 {
     if (inv == null) return;
-    vol += (double)inv.CurrentVolume;
-    maxVol += (double)inv.MaxVolume;
+    double cur = (double)inv.CurrentVolume, max = (double)inv.MaxVolume;
+    vol += cur;
+    maxVol += max;
+    if (max > 0) peakInventoryFill = Math.Max(peakInventoryFill, cur / max);
 }
 
 /// <summary>
@@ -70,6 +73,18 @@ static void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol
 /// </summary>
 void SampleOre()
 {
+    // Uranium, while we are already walking inventories.
+    uraniumKg = 0;
+    for (int i = 0; i < reactors.Count; i++)
+    {
+        IMyInventory inv = reactors[i].GetInventory(0);
+        if (inv == null) continue;
+        itemScratch.Clear();
+        inv.GetItems(itemScratch);
+        for (int k = 0; k < itemScratch.Count; k++)
+            if (itemScratch[k].Type.SubtypeId == "Uranium") uraniumKg += (double)itemScratch[k].Amount;
+    }
+
     double ore = 0;
     for (int i = 0; i < cargo.Count; i++)
         AccumulateOre(cargo[i].GetInventory(0), ref ore);
@@ -103,7 +118,18 @@ double ShaftOreSoFar()
     return Math.Max(0.0, oreAboard - shaftStartOre);
 }
 
-bool CargoFull { get { return cargoFill >= cargoFullAt; } }
+/// <summary>
+/// Out of usable room. Aggregate fill is the normal signal, but a single
+/// brimming inventory also counts: a drill with no conveyor to anywhere fills
+/// up and silently stops collecting while total fill still reads ten per cent,
+/// so the ship would keep grinding away collecting nothing. PAM solves this by
+/// balancing contents between drills; refusing to keep mining is cheaper and
+/// fails in the safe direction.
+/// </summary>
+bool CargoFull
+{
+    get { return cargoFill >= cargoFullAt || peakInventoryFill >= 0.98; }
+}
 
 // ---------------------------------------------------------------------------
 //  EJECTION

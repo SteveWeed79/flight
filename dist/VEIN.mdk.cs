@@ -392,7 +392,7 @@ namespace VEIN
         /// <summary>m/s in open space along the recorded path.</summary>
         double cruiseSpeed = 40.0;
         /// <summary>m/s during final dock approach.</summary>
-        double dockSpeed = 1.5;
+        double dockSpeed = 0.8;
         /// <summary>Return to base at this cargo fill fraction.</summary>
         double cargoFullAt = 0.92;
         /// <summary>Leave drills running on the way up. Widens the shaft, costs time.</summary>
@@ -415,6 +415,9 @@ namespace VEIN
         double minBattery = 0.30;
         /// <summary>Head home below this hydrogen fraction.</summary>
         double minHydrogen = 0.25;
+        /// <summary>Head home below this many kilograms of uranium across all reactors.
+        /// Ignored entirely on a ship with no reactors.</summary>
+        double minUranium = 2.0;
         /// <summary>Resume work above this battery fraction.</summary>
         double resumeBattery = 0.95;
         /// <summary>Resume work above this hydrogen fraction.</summary>
@@ -486,7 +489,7 @@ namespace VEIN
             drillSpeed    = Clamp(ini.Get(S_MINE, "drillSpeed").ToDouble(1.2), 0.05, 10.0);
             retreatSpeed  = Clamp(ini.Get(S_MINE, "retreatSpeed").ToDouble(3.0), 0.2, 20.0);
             cruiseSpeed   = Clamp(ini.Get(S_MINE, "cruiseSpeed").ToDouble(40.0), 1.0, 300.0);
-            dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(1.5), 0.2, 10.0);
+            dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
             cargoFullAt   = Clamp(ini.Get(S_MINE, "cargoFullAt").ToDouble(0.92), 0.1, 0.99);
             drillOnRetreat = ini.Get(S_MINE, "drillOnRetreat").ToBoolean(false);
 
@@ -498,6 +501,7 @@ namespace VEIN
 
             minBattery    = Clamp(ini.Get(S_SAFE, "minBattery").ToDouble(0.30), 0.05, 0.95);
             minHydrogen   = Clamp(ini.Get(S_SAFE, "minHydrogen").ToDouble(0.25), 0.0, 0.95);
+            minUranium    = Math.Max(0.0, ini.Get(S_SAFE, "minUranium").ToDouble(2.0));
             resumeBattery = Clamp(ini.Get(S_SAFE, "resumeBattery").ToDouble(0.95), 0.1, 1.0);
             resumeHydrogen = Clamp(ini.Get(S_SAFE, "resumeHydrogen").ToDouble(0.90), 0.0, 1.0);
             liftSafetyFactor = Clamp(ini.Get(S_SAFE, "liftSafetyFactor").ToDouble(0.80), 0.2, 1.0);
@@ -547,6 +551,7 @@ namespace VEIN
             ini.Set(S_MINE, "cruiseSpeed", cruiseSpeed);
             ini.SetComment(S_MINE, "cruiseSpeed", "Ceiling only. Real speed is capped by whatever the ship can\nactually stop from, given its mass and the local gravity.");
             ini.Set(S_MINE, "dockSpeed", dockSpeed);
+            ini.SetComment(S_MINE, "dockSpeed", "m/s on the final mating run. PAM uses 0.5 and docking is the\nmanoeuvre most likely to go wrong; slower is genuinely better here.");
             ini.Set(S_MINE, "cargoFullAt", cargoFullAt);
             ini.Set(S_MINE, "drillOnRetreat", drillOnRetreat);
 
@@ -562,6 +567,8 @@ namespace VEIN
 
             ini.Set(S_SAFE, "minBattery", minBattery);
             ini.Set(S_SAFE, "minHydrogen", minHydrogen);
+            ini.Set(S_SAFE, "minUranium", minUranium);
+            ini.SetComment(S_SAFE, "minUranium", "Kilograms across all reactors. Ignored if the ship has none.\n0 disables the check.");
             ini.Set(S_SAFE, "resumeBattery", resumeBattery);
             ini.Set(S_SAFE, "resumeHydrogen", resumeHydrogen);
             ini.Set(S_SAFE, "liftSafetyFactor", liftSafetyFactor);
@@ -668,6 +675,7 @@ namespace VEIN
         readonly List<IMyShipDrill> drills = new List<IMyShipDrill>();
         readonly List<IMyCargoContainer> cargo = new List<IMyCargoContainer>();
         readonly List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
+        readonly List<IMyReactor> reactors = new List<IMyReactor>();
         readonly List<IMyGasTank> hydrogenTanks = new List<IMyGasTank>();
         readonly List<IMyShipConnector> ejectors = new List<IMyShipConnector>();
         /// <summary>Surfaces that get plain monospace text — the PB's own screen.</summary>
@@ -791,6 +799,12 @@ namespace VEIN
         /// barely moves on a large ship when a few kilos of rock arrive.</summary>
         double cargoVolume;
         double batteryFill;
+        /// <summary>Kilograms of uranium across all reactors. A reactor ship with no
+        /// batteries reports full power forever, so this is its only fuel gauge.</summary>
+        double uraniumKg;
+        /// <summary>Fullest single inventory, 0..1. Aggregate fill hides the case where
+        /// one drill is brimming and has stopped collecting while the rest sit empty.</summary>
+        double peakInventoryFill;
         double hydrogenFill;
         /// <summary>kg of valuable ore aboard right now.</summary>
         double oreAboard;
@@ -1103,7 +1117,7 @@ namespace VEIN
             lastScanTick = tick;
 
             gyros.Clear(); thrusters.Clear(); drills.Clear(); cargo.Clear();
-            batteries.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
+            batteries.Clear(); reactors.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
             screens.Clear(); cameras.Clear(); oreDetectors.Clear();
 
             // ---- Controller ---------------------------------------------------------
@@ -1128,6 +1142,7 @@ namespace VEIN
             // ---- Storage and power --------------------------------------------------
             GridTerminalSystem.GetBlocksOfType(cargo, Mine);
             GridTerminalSystem.GetBlocksOfType(batteries, Mine);
+            GridTerminalSystem.GetBlocksOfType(reactors, Mine);
 
             var tanks = new List<IMyGasTank>();
             GridTerminalSystem.GetBlocksOfType(tanks, Mine);
@@ -1788,6 +1803,7 @@ namespace VEIN
         void SampleInventories()
         {
             double vol = 0, maxVol = 0;
+            peakInventoryFill = 0;
 
             for (int i = 0; i < cargo.Count; i++)
                 AccumulateVolume(cargo[i].GetInventory(0), ref vol, ref maxVol);
@@ -1825,11 +1841,13 @@ namespace VEIN
             hydrogenFill = tanks > 0 ? gas / tanks : 1.0;
         }
 
-        static void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
+        void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
         {
             if (inv == null) return;
-            vol += (double)inv.CurrentVolume;
-            maxVol += (double)inv.MaxVolume;
+            double cur = (double)inv.CurrentVolume, max = (double)inv.MaxVolume;
+            vol += cur;
+            maxVol += max;
+            if (max > 0) peakInventoryFill = Math.Max(peakInventoryFill, cur / max);
         }
 
         /// <summary>
@@ -1840,6 +1858,18 @@ namespace VEIN
         /// </summary>
         void SampleOre()
         {
+            // Uranium, while we are already walking inventories.
+            uraniumKg = 0;
+            for (int i = 0; i < reactors.Count; i++)
+            {
+                IMyInventory inv = reactors[i].GetInventory(0);
+                if (inv == null) continue;
+                itemScratch.Clear();
+                inv.GetItems(itemScratch);
+                for (int k = 0; k < itemScratch.Count; k++)
+                    if (itemScratch[k].Type.SubtypeId == "Uranium") uraniumKg += (double)itemScratch[k].Amount;
+            }
+
             double ore = 0;
             for (int i = 0; i < cargo.Count; i++)
                 AccumulateOre(cargo[i].GetInventory(0), ref ore);
@@ -1873,7 +1903,18 @@ namespace VEIN
             return Math.Max(0.0, oreAboard - shaftStartOre);
         }
 
-        bool CargoFull { get { return cargoFill >= cargoFullAt; } }
+        /// <summary>
+        /// Out of usable room. Aggregate fill is the normal signal, but a single
+        /// brimming inventory also counts: a drill with no conveyor to anywhere fills
+        /// up and silently stops collecting while total fill still reads ten per cent,
+        /// so the ship would keep grinding away collecting nothing. PAM solves this by
+        /// balancing contents between drills; refusing to keep mining is cheaper and
+        /// fails in the safe direction.
+        /// </summary>
+        bool CargoFull
+        {
+            get { return cargoFill >= cargoFullAt || peakInventoryFill >= 0.98; }
+        }
 
         // ---------------------------------------------------------------------------
         //  EJECTION
@@ -3478,6 +3519,9 @@ namespace VEIN
         {
             if (batteryFill < minBattery) return false;
             if (hydrogenTanks.Count > 0 && hydrogenFill < minHydrogen) return false;
+            // A reactor ship with no batteries reports full power indefinitely, so
+            // without this it would run its reactors dry in flight and never come home.
+            if (reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium) return false;
 
             // The measured check, once the ship has told us how much it drinks. A fixed
             // percentage is wasteful on a short hop and fatal on a long one; this asks
@@ -4679,6 +4723,9 @@ namespace VEIN
                 if (margin < 0) sb.Append("  OVER");
                 sb.Append('\n');
             }
+
+            if (reactors.Count > 0)
+                sb.Append("Uranium ").Append(Fmt(uraniumKg, 1)).Append("kg\n");
 
             if (hydroCalibrated)
             {

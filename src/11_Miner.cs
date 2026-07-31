@@ -581,6 +581,9 @@ bool HasReservesForWork()
 {
     if (batteryFill < minBattery) return false;
     if (hydrogenTanks.Count > 0 && hydrogenFill < minHydrogen) return false;
+    // A reactor ship with no batteries reports full power indefinitely, so
+    // without this it would run its reactors dry in flight and never come home.
+    if (reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium) return false;
 
     // The measured check, once the ship has told us how much it drinks. A fixed
     // percentage is wasteful on a short hop and fatal on a long one; this asks

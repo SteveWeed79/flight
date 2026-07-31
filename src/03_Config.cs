@@ -28,7 +28,7 @@ double retreatSpeed = 3.0;
 /// <summary>m/s in open space along the recorded path.</summary>
 double cruiseSpeed = 40.0;
 /// <summary>m/s during final dock approach.</summary>
-double dockSpeed = 1.5;
+double dockSpeed = 0.8;
 /// <summary>Return to base at this cargo fill fraction.</summary>
 double cargoFullAt = 0.92;
 /// <summary>Leave drills running on the way up. Widens the shaft, costs time.</summary>
@@ -51,6 +51,9 @@ double oreScanRange = 500.0;
 double minBattery = 0.30;
 /// <summary>Head home below this hydrogen fraction.</summary>
 double minHydrogen = 0.25;
+/// <summary>Head home below this many kilograms of uranium across all reactors.
+/// Ignored entirely on a ship with no reactors.</summary>
+double minUranium = 2.0;
 /// <summary>Resume work above this battery fraction.</summary>
 double resumeBattery = 0.95;
 /// <summary>Resume work above this hydrogen fraction.</summary>
@@ -122,7 +125,7 @@ void LoadConfig()
     drillSpeed    = Clamp(ini.Get(S_MINE, "drillSpeed").ToDouble(1.2), 0.05, 10.0);
     retreatSpeed  = Clamp(ini.Get(S_MINE, "retreatSpeed").ToDouble(3.0), 0.2, 20.0);
     cruiseSpeed   = Clamp(ini.Get(S_MINE, "cruiseSpeed").ToDouble(40.0), 1.0, 300.0);
-    dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(1.5), 0.2, 10.0);
+    dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
     cargoFullAt   = Clamp(ini.Get(S_MINE, "cargoFullAt").ToDouble(0.92), 0.1, 0.99);
     drillOnRetreat = ini.Get(S_MINE, "drillOnRetreat").ToBoolean(false);
 
@@ -134,6 +137,7 @@ void LoadConfig()
 
     minBattery    = Clamp(ini.Get(S_SAFE, "minBattery").ToDouble(0.30), 0.05, 0.95);
     minHydrogen   = Clamp(ini.Get(S_SAFE, "minHydrogen").ToDouble(0.25), 0.0, 0.95);
+    minUranium    = Math.Max(0.0, ini.Get(S_SAFE, "minUranium").ToDouble(2.0));
     resumeBattery = Clamp(ini.Get(S_SAFE, "resumeBattery").ToDouble(0.95), 0.1, 1.0);
     resumeHydrogen = Clamp(ini.Get(S_SAFE, "resumeHydrogen").ToDouble(0.90), 0.0, 1.0);
     liftSafetyFactor = Clamp(ini.Get(S_SAFE, "liftSafetyFactor").ToDouble(0.80), 0.2, 1.0);
@@ -183,6 +187,7 @@ void WriteConfig()
     ini.Set(S_MINE, "cruiseSpeed", cruiseSpeed);
     ini.SetComment(S_MINE, "cruiseSpeed", "Ceiling only. Real speed is capped by whatever the ship can\nactually stop from, given its mass and the local gravity.");
     ini.Set(S_MINE, "dockSpeed", dockSpeed);
+    ini.SetComment(S_MINE, "dockSpeed", "m/s on the final mating run. PAM uses 0.5 and docking is the\nmanoeuvre most likely to go wrong; slower is genuinely better here.");
     ini.Set(S_MINE, "cargoFullAt", cargoFullAt);
     ini.Set(S_MINE, "drillOnRetreat", drillOnRetreat);
 
@@ -198,6 +203,8 @@ void WriteConfig()
 
     ini.Set(S_SAFE, "minBattery", minBattery);
     ini.Set(S_SAFE, "minHydrogen", minHydrogen);
+    ini.Set(S_SAFE, "minUranium", minUranium);
+    ini.SetComment(S_SAFE, "minUranium", "Kilograms across all reactors. Ignored if the ship has none.\n0 disables the check.");
     ini.Set(S_SAFE, "resumeBattery", resumeBattery);
     ini.Set(S_SAFE, "resumeHydrogen", resumeHydrogen);
     ini.Set(S_SAFE, "liftSafetyFactor", liftSafetyFactor);

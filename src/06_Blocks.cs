@@ -11,7 +11,7 @@ void ScanBlocks()
     lastScanTick = tick;
 
     gyros.Clear(); thrusters.Clear(); drills.Clear(); cargo.Clear();
-    batteries.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
+    batteries.Clear(); reactors.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
     screens.Clear(); cameras.Clear(); oreDetectors.Clear();
 
     // ---- Controller ---------------------------------------------------------
@@ -36,6 +36,7 @@ void ScanBlocks()
     // ---- Storage and power --------------------------------------------------
     GridTerminalSystem.GetBlocksOfType(cargo, Mine);
     GridTerminalSystem.GetBlocksOfType(batteries, Mine);
+    GridTerminalSystem.GetBlocksOfType(reactors, Mine);
 
     var tanks = new List<IMyGasTank>();
     GridTerminalSystem.GetBlocksOfType(tanks, Mine);
