@@ -369,6 +369,7 @@ readonly List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
 readonly List<IMyGasTank> hydrogenTanks = new List<IMyGasTank>();
 readonly List<IMyShipConnector> ejectors = new List<IMyShipConnector>();
 readonly List<IMyTextSurface> screens = new List<IMyTextSurface>();
+readonly List<IMyTextSurface> panels = new List<IMyTextSurface>();
 readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
 readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
 readonly List<IMyShipConnector> baseConnectors = new List<IMyShipConnector>();
@@ -407,7 +408,7 @@ bool homeDockSet;
 double maxFlyableMass = -1;
 readonly Job job = new Job();
 YieldCell[] cells = new YieldCell[0];
-int activeCell = -1;
+int _a = -1;
 double shaftDepth;
 double shaftMaxDepth;
 double shaftDepthLimit;
@@ -639,6 +640,7 @@ return true;
 }
 void CollectScreens()
 {
+panels.Clear();
 blockScratch.Clear();
 GridTerminalSystem.GetBlocksOfType(blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
 for (int i = 0; i < blockScratch.Count; i++)
@@ -646,11 +648,10 @@ for (int i = 0; i < blockScratch.Count; i++)
 var provider = blockScratch[i] as IMyTextSurfaceProvider;
 if (provider == null || provider.SurfaceCount == 0) continue;
 IMyTextSurface s = provider.GetSurface(0);
-s.ContentType = ContentType.TEXT_AND_IMAGE;
-s.Font = "Monospace";
-s.FontSize = 0.55f;
-s.TextPadding = 2f;
-screens.Add(s);
+s.ContentType = ContentType.SCRIPT;
+s.Script = "";
+s.ScriptBackgroundColor = C_BG;
+panels.Add(s);
 }
 if (Me.SurfaceCount > 0)
 {
@@ -658,6 +659,7 @@ IMyTextSurface own = Me.GetSurface(0);
 own.ContentType = ContentType.TEXT_AND_IMAGE;
 own.Font = "Monospace";
 own.FontSize = 0.5f;
+own.TextPadding = 2f;
 screens.Add(own);
 }
 }
@@ -1162,7 +1164,7 @@ job.Depth = Math.Max(1, depth);
 MeasureShip();
 job.Spacing = derivedSpacing;
 RebuildCells();
-activeCell = -1;
+_a = -1;
 jobComplete = false;
 probePassDone = false;
 Log("Job " + job.Width + "x" + job.Height + " @" + job.Depth + "m, pitch "
@@ -1373,12 +1375,12 @@ SendShaftReport(idx, result, oreKg, metres, depthReached, wasProbe);
 }
 void MarkCellStuck()
 {
-if (activeCell < 0 || activeCell >= cells.Length) return;
-cells[activeCell].StuckCount++;
-if (cells[activeCell].StuckCount >= 3)
+if (_a < 0 || _a >= cells.Length) return;
+cells[_a].StuckCount++;
+if (cells[_a].StuckCount >= 3)
 {
-cells[activeCell].State = CellState.Blocked;
-Log("Cell " + CellCol(activeCell) + "," + CellRow(activeCell) + " blocked");
+cells[_a].State = CellState.Blocked;
+Log("Cell " + CellCol(_a) + "," + CellRow(_a) + " blocked");
 }
 }
 double RecordInterval { get { return Math.Max(5.0, shipRadius * 2.0); } }
@@ -1619,7 +1621,7 @@ void StSelecting(bool entry)
 if (entry)
 {
 statusLine = "Choosing shaft";
-activeCell = -1;
+_a = -1;
 awaitingLease = false;
 }
 if (HasDispatcher)
@@ -1631,7 +1633,7 @@ awaitingLease = true;
 lastRequestTick = tick;
 return;
 }
-if (activeCell >= 0) { awaitingLease = false; BeginShaft(); return; }
+if (_a >= 0) { awaitingLease = false; BeginShaft(); return; }
 if (tick - lastRequestTick > 60)
 {
 if (tick - lastDispatcherSeenTick > (long)(droneTimeout / Math.Max(dt, 0.01)))
@@ -1651,7 +1653,7 @@ Log("Job complete");
 SetState(MinerState.Inbound);
 return;
 }
-activeCell = cell;
+_a = cell;
 cells[cell].State = CellState.Leased;
 BeginShaft();
 }
@@ -1670,10 +1672,10 @@ SetState(MinerState.Approaching);
 }
 void StApproaching(bool entry)
 {
-if (activeCell < 0) { SetState(MinerState.Selecting); return; }
-if (entry) { statusLine = "To shaft " + CellLabel(activeCell); SetDrills(false); }
+if (_a < 0) { SetState(MinerState.Selecting); return; }
+if (entry) { statusLine = "To shaft " + CellLabel(_a); SetDrills(false); }
 if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
-int col = CellCol(activeCell), row = CellRow(activeCell);
+int col = CellCol(_a), row = CellRow(_a);
 double standoff = transitAltitude + myLane;
 Vector3D above = job.CellMouth(col, row, standoff);
 FlyTo(ControllerTargetFor(above), cruiseSpeed * 0.5);
@@ -1695,21 +1697,21 @@ return hit <= standoff + 8.0;
 }
 void SkipEmptyCell()
 {
-Log(CellLabel(activeCell) + " is open space — skipping");
-RecordShaftResult(activeCell, ShaftResult.Completed, 0, 0, 0, shaftIsProbe);
-if (activeCell >= 0 && activeCell < cells.Length)
-cells[activeCell].State = CellState.Barren;
+Log(CellLabel(_a) + " is open space — skipping");
+RecordShaftResult(_a, ShaftResult.Completed, 0, 0, 0, shaftIsProbe);
+if (_a >= 0 && _a < cells.Length)
+cells[_a].State = CellState.Barren;
 ReleaseLeaseLocal();
-activeCell = -1;
+_a = -1;
 SetState(MinerState.Selecting);
 }
 void StDescending(bool entry)
 {
-if (activeCell < 0) { SetState(MinerState.Selecting); return; }
-int col = CellCol(activeCell), row = CellRow(activeCell);
+if (_a < 0) { SetState(MinerState.Selecting); return; }
+int col = CellCol(_a), row = CellRow(_a);
 if (entry)
 {
-statusLine = (shaftIsProbe ? "Probing " : "Drilling ") + CellLabel(activeCell);
+statusLine = (shaftIsProbe ? "Probing " : "Drilling ") + CellLabel(_a);
 stuckRefDepth = CurrentShaftDepth(col, row);
 stuckTicks = 0;
 lastOreSample = ShaftOreSoFar();
@@ -1751,8 +1753,8 @@ if (entry)
 statusLine = "Withdrawing";
 SetDrills(drillOnRetreat);
 }
-if (activeCell < 0) { SetState(MinerState.Selecting); return; }
-int col = CellCol(activeCell), row = CellRow(activeCell);
+if (_a < 0) { SetState(MinerState.Selecting); return; }
+int col = CellCol(_a), row = CellRow(_a);
 double depth = CurrentShaftDepth(col, row);
 double standoff = transitAltitude + myLane;
 Vector3D clearOfHole = job.CellMouth(col, row, standoff);
@@ -1773,12 +1775,12 @@ double cut = shaftContactDepth >= 0
 ? Math.Max(0.0, shaftMaxDepth - shaftContactDepth)
 : 0.0;
 if (shaftContactDepth < 0 && result == ShaftResult.Completed)
-Log(CellLabel(activeCell) + " never reached rock");
-RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
+Log(CellLabel(_a) + " never reached rock");
+RecordShaftResult(_a, result, ore, cut, cut, shaftIsProbe);
 ReleaseLeaseLocal();
-Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
+Log(CellLabel(_a) + " " + result + ": " + Fmt(ore, 0) + "kg / "
 + Fmt(cut, 1) + "m cut");
-activeCell = -1;
+_a = -1;
 if (!jobRunning) { SetState(MinerState.Inbound); return; }
 if (result == ShaftResult.Aborted || result == ShaftResult.CargoFull)
 {
@@ -1949,7 +1951,7 @@ Log("Damage detected — returning");
 if (state != MinerState.Inbound && state != MinerState.Docking
 && state != MinerState.Unloading && state != MinerState.Servicing)
 {
-if (activeCell >= 0) AbandonShaft(ShaftResult.Aborted);
+if (_a >= 0) AbandonShaft(ShaftResult.Aborted);
 else SetState(MinerState.Inbound);
 }
 }
@@ -2164,7 +2166,7 @@ string body = "H|" + ShipLabel()
 + "|" + EncD(cargoFill)
 + "|" + EncD(batteryFill)
 + "|" + EncV(shipPos)
-+ "|" + activeCell;
++ "|" + _a;
 IGC.SendUnicastMessage(dispatcherAddr, igcChannel, body);
 }
 void RequestLease()
@@ -2199,17 +2201,17 @@ IGC.SendUnicastMessage(dispatcherAddr, igcChannel, "OS|" + s.OreType + "|" + Enc
 }
 void ReleaseLease(ShaftResult why)
 {
-if (activeCell < 0) return;
+if (_a < 0) return;
 if (dispatcherAddr != 0)
-SendShaftReport(activeCell, why, ShaftOreSoFar(), shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
+SendShaftReport(_a, why, ShaftOreSoFar(), shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
 ReleaseLeaseLocal();
-activeCell = -1;
+_a = -1;
 }
 void ReleaseLeaseLocal()
 {
-if (activeCell < 0 || activeCell >= cells.Length) return;
-if (cells[activeCell].State == CellState.Leased) cells[activeCell].State = CellState.Unknown;
-cells[activeCell].LeasedBy = 0;
+if (_a < 0 || _a >= cells.Length) return;
+if (cells[_a].State == CellState.Leased) cells[_a].State = CellState.Unknown;
+cells[_a].LeasedBy = 0;
 }
 void SendBeacon()
 {
@@ -2303,12 +2305,12 @@ GrantLease(src, cell, limit, shaftIsProbe, r.Lane);
 void OnLeaseGrant(long src, string[] f)
 {
 if (role != Role.Miner || f.Length < 5) return;
-activeCell = ParseInt(f[1], -1);
+_a = ParseInt(f[1], -1);
 shaftDepthLimit = DecD(f[2]);
 shaftIsProbe = f[3] == "1";
 myLane = DecD(f[4]);
-if (activeCell >= 0 && activeCell < cells.Length)
-cells[activeCell].State = CellState.Leased;
+if (_a >= 0 && _a < cells.Length)
+cells[_a].State = CellState.Leased;
 }
 void OnLeaseDenied(long src, string[] f)
 {
@@ -2598,6 +2600,7 @@ for (int i = 0; i < screens.Count; i++)
 try { screens[i].WriteText(lastRender); }
 catch {   }
 }
+RenderSprites();
 if (verboseEcho) Echo(lastRender);
 }
 void RenderMiner()
@@ -2612,9 +2615,9 @@ sb.Append("Power  ").Append(Bar(batteryFill, 12)).Append(' ')
 if (hydrogenTanks.Count > 0)
 sb.Append("H2     ").Append(Bar(hydrogenFill, 12)).Append(' ')
 .Append(Fmt(hydrogenFill * 100, 0)).Append("%\n");
-if (activeCell >= 0)
+if (_a >= 0)
 {
-sb.Append("Shaft  ").Append(CellLabel(activeCell));
+sb.Append("Shaft  ").Append(CellLabel(_a));
 if (shaftIsProbe) sb.Append(" probe");
 sb.Append("  ").Append(Fmt(shaftDepth, 1)).Append('/')
 .Append(Fmt(shaftDepthLimit, 0)).Append("m\n");
@@ -2682,7 +2685,7 @@ for (int row = 0; row < job.Height; row++)
 for (int col = 0; col < job.Width; col++)
 {
 int idx = job.IndexOf(col, row);
-sb.Append(idx == activeCell ? '@' : CellGlyph(cells[idx]));
+sb.Append(idx == _a ? '@' : CellGlyph(cells[idx]));
 }
 sb.Append('\n');
 }
@@ -2817,7 +2820,7 @@ void CmdReset()
 {
 RebuildCells();
 sightings.Clear();
-activeCell = -1;
+_a = -1;
 jobComplete = false;
 probePassDone = false;
 stuckRetries = 0;
@@ -2892,7 +2895,7 @@ b.Append("V|").Append(STORAGE_REV).Append('\n');
 b.Append("S|").Append((int)state)
 .Append('|').Append(jobRunning ? 1 : 0)
 .Append('|').Append(jobComplete ? 1 : 0)
-.Append('|').Append(activeCell)
+.Append('|').Append(_a)
 .Append('|').Append(probePassDone ? 1 : 0)
 .Append('\n');
 if (job.IsSet)
@@ -2998,7 +3001,7 @@ void LoadLifecycle(string[] f)
 MinerState saved = (MinerState)ParseInt(f[1], 0);
 jobRunning = f[2] == "1";
 jobComplete = f[3] == "1";
-activeCell = ParseInt(f[4], -1);
+_a = ParseInt(f[4], -1);
 probePassDone = f[5] == "1";
 state = saved == MinerState.Fault ? MinerState.Fault : MinerState.Idle;
 stateEntry = true;
@@ -3035,4 +3038,296 @@ c.MetresDrilled = (float)DecD(p[3]);
 c.DepthReached = (float)DecD(p[4]);
 c.StuckCount = ParseInt(p[5], 0);
 }
+}
+static readonly Color C_BG      = new Color(8, 12, 16);
+static readonly Color C_PANEL   = new Color(18, 26, 34);
+static readonly Color C_INK     = new Color(150, 180, 200);
+static readonly Color C_DIM     = new Color(70, 90, 105);
+static readonly Color C_ACCENT  = new Color(90, 200, 255);
+static readonly Color C_WARN    = new Color(255, 170, 60);
+static readonly Color C_BAD     = new Color(255, 80, 70);
+static readonly Color C_GOOD    = new Color(120, 230, 140);
+void RenderSprites()
+{
+for (int i = 0; i < panels.Count; i++)
+{
+try { DrawDashboard(panels[i]); }
+catch {   }
+}
+}
+void DrawDashboard(IMyTextSurface s)
+{
+Vector2 size = s.SurfaceSize;
+Vector2 origin = (s.TextureSize - size) * 0.5f;
+using (MySpriteDrawFrame frame = s.DrawFrame())
+{
+Fill(frame, origin, size, C_BG);
+float pad = size.Y * 0.03f;
+float headerH = size.Y * 0.13f;
+DrawHeader(frame, origin + new Vector2(pad, pad),
+new Vector2(size.X - pad * 2, headerH));
+float bodyY = pad * 2 + headerH;
+float bodyH = size.Y - bodyY - pad;
+bool wide = size.X > size.Y * 1.4f;
+float mapW = wide ? (size.X - pad * 3) * 0.58f : size.X - pad * 2;
+float mapH = wide ? bodyH : bodyH * 0.62f;
+DrawMapPanel(frame, origin + new Vector2(pad, bodyY), new Vector2(mapW, mapH));
+Vector2 sidePos = wide
+? origin + new Vector2(pad * 2 + mapW, bodyY)
+: origin + new Vector2(pad, bodyY + mapH + pad);
+Vector2 sideSize = wide
+? new Vector2(size.X - mapW - pad * 3, bodyH)
+: new Vector2(size.X - pad * 2, bodyH - mapH - pad);
+if (role == Role.Dispatcher) DrawFleetPanel(frame, sidePos, sideSize);
+else DrawShipPanel(frame, sidePos, sideSize);
+}
+}
+void DrawHeader(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
+{
+Fill(frame, pos, size, C_PANEL);
+bool fault = state == MinerState.Fault;
+Color accent = fault ? C_BAD : C_ACCENT;
+Fill(frame, pos, new Vector2(size.Y * 0.10f, size.Y), accent);
+float fs = size.Y * 0.030f;
+Text(frame, "VEIN", pos + new Vector2(size.Y * 0.28f, size.Y * 0.10f), fs * 1.15f, accent);
+string sub = role == Role.Dispatcher
+? fleet.Count + " drone" + (fleet.Count == 1 ? "" : "s")
+: (HasDispatcher ? "fleet" : "solo");
+Text(frame, sub, pos + new Vector2(size.Y * 0.28f, size.Y * 0.55f), fs * 0.62f, C_DIM);
+string headline = fault ? faultReason : statusLine;
+if (headline.Length > 34) headline = headline.Substring(0, 33) + "…";
+Text(frame, headline, pos + new Vector2(size.X * 0.30f, size.Y * 0.10f), fs * 0.80f,
+fault ? C_BAD : C_INK);
+if (job.IsSet)
+{
+Text(frame, Fmt(JobProgress() * 100, 0) + "%",
+pos + new Vector2(size.X - size.Y * 0.20f, size.Y * 0.10f), fs * 1.05f, C_INK,
+TextAlignment.RIGHT);
+float w = size.X - size.Y * 0.40f;
+Vector2 barPos = pos + new Vector2(size.X * 0.30f, size.Y * 0.72f);
+Fill(frame, barPos, new Vector2(w * 0.62f, size.Y * 0.06f), C_DIM);
+Fill(frame, barPos, new Vector2(w * 0.62f * (float)JobProgress(), size.Y * 0.06f), accent);
+}
+}
+void DrawMapPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
+{
+Fill(frame, pos, size, C_PANEL);
+if (!job.IsSet || cells.Length == 0)
+{
+Text(frame, "no job set", pos + size * 0.5f, size.Y * 0.06f, C_DIM, TextAlignment.CENTER);
+return;
+}
+float pad = size.Y * 0.05f;
+float labelH = size.Y * 0.10f;
+Vector2 area = new Vector2(size.X - pad * 2, size.Y - pad * 2 - labelH);
+float cell = Math.Min(area.X / job.Width, area.Y / job.Height);
+float gap = cell > 8f ? cell * 0.08f : 0f;
+Vector2 gridSize = new Vector2(cell * job.Width, cell * job.Height);
+Vector2 gridPos = pos + new Vector2(pad, pad) + (area - gridSize) * 0.5f;
+float peak = 0.01f;
+for (int i = 0; i < cells.Length; i++)
+if (cells[i].Yield > peak) peak = cells[i].Yield;
+int step = 1;
+while ((job.Width / step) * (job.Height / step) > 600) step++;
+for (int row = 0; row < job.Height; row += step)
+{
+for (int col = 0; col < job.Width; col += step)
+{
+int idx = job.IndexOf(col, row);
+Vector2 p = gridPos + new Vector2(col * cell, row * cell);
+Fill(frame, p + new Vector2(gap * 0.5f, gap * 0.5f),
+new Vector2(cell * step - gap, cell * step - gap), CellColor(cells[idx], peak));
+}
+}
+if (role == Role.Dispatcher)
+{
+foreach (var kv in fleet)
+DrawDroneMarker(frame, gridPos, cell, kv.Value.Position, C_ACCENT);
+}
+else if (_a >= 0)
+{
+int col = CellCol(_a), row = CellRow(_a);
+Vector2 p = gridPos + new Vector2((col + 0.5f) * cell, (row + 0.5f) * cell);
+Sprite(frame, "CircleHollow", p, new Vector2(cell * 1.9f, cell * 1.9f), Color.White);
+}
+Text(frame, "yield map  ·  peak " + Fmt(peak, 1) + " kg/m",
+pos + new Vector2(size.X * 0.5f, size.Y - labelH), size.Y * 0.055f, C_DIM,
+TextAlignment.CENTER);
+}
+static Color CellColor(YieldCell c, float peak)
+{
+switch (c.State)
+{
+case CellState.Unknown: return new Color(24, 34, 44);
+case CellState.Leased:  return new Color(70, 130, 200);
+case CellState.Blocked: return new Color(120, 40, 40);
+case CellState.Barren:  return new Color(40, 36, 32);
+}
+float t = peak > 0 ? Clamped(c.Yield / peak) : 0f;
+Color hot = t < 0.5f
+? Lerp(new Color(90, 30, 25), new Color(220, 150, 40), t * 2f)
+: Lerp(new Color(220, 150, 40), new Color(110, 240, 130), (t - 0.5f) * 2f);
+if (c.State == CellState.Exhausted) return Dim(hot, 0.45f);
+return hot;
+}
+void DrawDroneMarker(MySpriteDrawFrame frame, Vector2 gridPos, float cell, Vector3D world, Color col)
+{
+if (job.Spacing <= 0) return;
+Vector3D d = world - job.Origin;
+double x = Vector3D.Dot(d, job.Right) / job.Spacing + (job.Width - 1) * 0.5;
+double y = Vector3D.Dot(d, job.Forward) / job.Spacing + (job.Height - 1) * 0.5;
+if (x < -1 || x > job.Width || y < -1 || y > job.Height) return;
+Vector2 p = gridPos + new Vector2((float)(x + 0.5) * cell, (float)(y + 0.5) * cell);
+Sprite(frame, "Circle", p, new Vector2(cell * 0.7f, cell * 0.7f), col);
+}
+void DrawShipPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
+{
+Fill(frame, pos, size, C_PANEL);
+float pad = size.Y * 0.06f;
+float fs = size.Y * 0.055f;
+float y = pos.Y + pad;
+float rowH = size.Y * 0.145f;
+Gauge(frame, new Vector2(pos.X + pad, y), size.X - pad * 2, rowH, "CARGO",
+cargoFill, FmtMass(oreAboard) + " ore", GaugeColor(cargoFill, true));
+y += rowH;
+Gauge(frame, new Vector2(pos.X + pad, y), size.X - pad * 2, rowH, "POWER",
+batteryFill, Fmt(batteryFill * 100, 0) + "%", GaugeColor(batteryFill, false));
+y += rowH;
+if (hydrogenTanks.Count > 0)
+{
+Gauge(frame, new Vector2(pos.X + pad, y), size.X - pad * 2, rowH, "H2",
+hydrogenFill, Fmt(hydrogenFill * 100, 0) + "%", GaugeColor(hydrogenFill, false));
+y += rowH;
+}
+y += pad * 0.5f;
+if (_a >= 0)
+{
+string what = (shaftIsProbe ? "probe " : "shaft ") + CellLabel(_a);
+Text(frame, what, new Vector2(pos.X + pad, y), fs, C_DIM);
+Text(frame, Fmt(Math.Max(0, shaftDepth), 1) + " m",
+new Vector2(pos.X + size.X - pad, y), fs, C_INK, TextAlignment.RIGHT);
+y += rowH * 0.75f;
+}
+if (maxFlyableMass > 0)
+{
+bool over = shipMass >= maxFlyableMass;
+Text(frame, "lift", new Vector2(pos.X + pad, y), fs, C_DIM);
+Text(frame, FmtMass(shipMass) + " / " + FmtMass(maxFlyableMass),
+new Vector2(pos.X + size.X - pad, y), fs, over ? C_BAD : C_INK, TextAlignment.RIGHT);
+y += rowH * 0.75f;
+}
+Text(frame, "scout", new Vector2(pos.X + pad, y), fs, C_DIM);
+Text(frame, oreModAvailable ? "ore raycast" : "probe map",
+new Vector2(pos.X + size.X - pad, y), fs,
+oreModAvailable ? C_GOOD : C_INK, TextAlignment.RIGHT);
+}
+void DrawFleetPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
+{
+Fill(frame, pos, size, C_PANEL);
+float pad = size.Y * 0.05f;
+float fs = size.Y * 0.048f;
+float y = pos.Y + pad;
+Text(frame, FmtMass(FleetOreTotal()) + " recovered", new Vector2(pos.X + pad, y), fs * 1.2f, C_GOOD);
+y += size.Y * 0.11f;
+Text(frame, Fmt(FleetMetresTotal(), 0) + " m drilled  ·  " + RemainingCellCount() + " shafts left",
+new Vector2(pos.X + pad, y), fs * 0.85f, C_DIM);
+y += size.Y * 0.10f;
+if (fleet.Count == 0)
+{
+Text(frame, "no drones on channel", new Vector2(pos.X + pad, y), fs, C_WARN);
+return;
+}
+float rowH = Math.Min(size.Y * 0.13f, (size.Y - (y - pos.Y) - pad) / Math.Max(1, fleet.Count));
+foreach (var kv in fleet)
+{
+DroneRecord r = kv.Value;
+if (y + rowH > pos.Y + size.Y) break;
+Color dot = r.State == MinerState.Fault ? C_BAD
+: r.State == MinerState.Idle ? C_DIM : C_GOOD;
+Sprite(frame, "Circle", new Vector2(pos.X + pad + fs * 0.4f, y + rowH * 0.35f),
+new Vector2(fs * 0.55f, fs * 0.55f), dot);
+string name = r.Name.Length > 12 ? r.Name.Substring(0, 12) : r.Name;
+Text(frame, name, new Vector2(pos.X + pad + fs * 1.1f, y), fs, C_INK);
+Text(frame, r.State.ToString(), new Vector2(pos.X + size.X - pad, y), fs * 0.8f,
+C_DIM, TextAlignment.RIGHT);
+float barW = size.X - pad * 2 - fs * 1.1f;
+float barX = pos.X + pad + fs * 1.1f;
+float barY = y + rowH * 0.62f;
+Fill(frame, new Vector2(barX, barY), new Vector2(barW, rowH * 0.08f), C_BG);
+Fill(frame, new Vector2(barX, barY), new Vector2(barW * r.CargoFill, rowH * 0.08f), C_ACCENT);
+Fill(frame, new Vector2(barX, barY + rowH * 0.13f), new Vector2(barW, rowH * 0.08f), C_BG);
+Fill(frame, new Vector2(barX, barY + rowH * 0.13f),
+new Vector2(barW * r.Battery, rowH * 0.08f), GaugeColor(r.Battery, false));
+y += rowH;
+}
+}
+void Gauge(MySpriteDrawFrame frame, Vector2 pos, float w, float h,
+string label, double value, string readout, Color col)
+{
+float fs = h * 0.34f;
+Text(frame, label, pos, fs, C_DIM);
+Text(frame, readout, new Vector2(pos.X + w, pos.Y), fs, C_INK, TextAlignment.RIGHT);
+Vector2 barPos = new Vector2(pos.X, pos.Y + h * 0.52f);
+Vector2 barSize = new Vector2(w, h * 0.20f);
+Fill(frame, barPos, barSize, C_BG);
+Fill(frame, barPos, new Vector2(w * Clamped((float)value), barSize.Y), col);
+}
+static Color GaugeColor(double v, bool fullIsBad)
+{
+double t = fullIsBad ? 1.0 - v : v;
+if (t > 0.5) return C_GOOD;
+if (t > 0.2) return C_WARN;
+return C_BAD;
+}
+static void Fill(MySpriteDrawFrame frame, Vector2 pos, Vector2 size, Color col)
+{
+frame.Add(new MySprite()
+{
+Type = SpriteType.TEXTURE,
+Data = "SquareSimple",
+Position = pos + size * 0.5f,
+Size = size,
+Color = col,
+Alignment = TextAlignment.CENTER
+});
+}
+static void Sprite(MySpriteDrawFrame frame, string id, Vector2 centre, Vector2 size, Color col)
+{
+frame.Add(new MySprite()
+{
+Type = SpriteType.TEXTURE,
+Data = id,
+Position = centre,
+Size = size,
+Color = col,
+Alignment = TextAlignment.CENTER
+});
+}
+static void Text(MySpriteDrawFrame frame, string text, Vector2 pos, float scale, Color col,
+TextAlignment align = TextAlignment.LEFT)
+{
+frame.Add(new MySprite()
+{
+Type = SpriteType.TEXT,
+Data = text,
+Position = pos,
+RotationOrScale = scale,
+Color = col,
+Alignment = align,
+FontId = "White"
+});
+}
+static float Clamped(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
+static float Clamped(double v) { return Clamped((float)v); }
+static Color Lerp(Color a, Color b, float t)
+{
+t = Clamped(t);
+return new Color(
+(int)(a.R + (b.R - a.R) * t),
+(int)(a.G + (b.G - a.G) * t),
+(int)(a.B + (b.B - a.B) * t));
+}
+static Color Dim(Color c, float f)
+{
+return new Color((int)(c.R * f), (int)(c.G * f), (int)(c.B * f));
 }

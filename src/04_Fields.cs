@@ -30,7 +30,10 @@ readonly List<IMyCargoContainer> cargo = new List<IMyCargoContainer>();
 readonly List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
 readonly List<IMyGasTank> hydrogenTanks = new List<IMyGasTank>();
 readonly List<IMyShipConnector> ejectors = new List<IMyShipConnector>();
+/// <summary>Surfaces that get plain monospace text — the PB's own screen.</summary>
 readonly List<IMyTextSurface> screens = new List<IMyTextSurface>();
+/// <summary>Tagged LCDs, which get the sprite dashboard instead.</summary>
+readonly List<IMyTextSurface> panels = new List<IMyTextSurface>();
 readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
 readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
 readonly List<IMyShipConnector> baseConnectors = new List<IMyShipConnector>(); // dispatcher side

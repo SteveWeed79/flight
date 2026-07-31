@@ -33,6 +33,9 @@ DIST = os.path.join(ROOT, "dist")
 SRC_FILE = os.path.join(DIST, "VEIN.cs")
 OUT_FILE = os.path.join(DIST, "VEIN.min.cs")
 
+# The in-game script editor refuses anything larger.
+LIMIT = 100000
+
 # Never rename these: the game calls them, or they are part of an API contract.
 PROTECTED = {
     "Program", "Main", "Save", "Echo", "Storage", "Runtime", "Me",
@@ -163,14 +166,76 @@ def short_names():
             yield "_" + a + b
 
 
-def rename(text, names):
+def split_code_and_strings(text):
+    """Split into alternating code / literal segments.
+
+    Renaming must never touch string or character literals. The script passes
+    terminal property names as strings — "RaycastTarget", "AvailableScanRange" —
+    and a blind regex rename would happily corrupt one into "_ab", which fails
+    silently at runtime in a way that looks like the mod is missing.
+    """
+    segments = []          # (is_code, text)
+    buf = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '"' or c == "'":
+            segments.append((True, "".join(buf)))
+            buf = []
+            quote = c
+            lit = [c]
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    lit.append(text[i : i + 2])
+                    i += 2
+                    continue
+                lit.append(text[i])
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            segments.append((False, "".join(lit)))
+            continue
+        buf.append(c)
+        i += 1
+    segments.append((True, "".join(buf)))
+    return segments
+
+
+def rename(text, names, target):
+    """Shorten identifiers, longest-first, stopping as soon as we fit.
+
+    Renaming everything makes in-game stack traces useless. Renaming the fewest
+    identifiers that get us under the limit keeps most of the script readable,
+    and the ones sacrificed are the long descriptive names that cost the most
+    bytes — which are also the easiest to recognise from context.
+    """
+    segments = split_code_and_strings(text)
     gen = short_names()
     used = 0
-    for name in sorted(names, key=len, reverse=True):
+
+    # Biggest saving first: occurrences × characters removed.
+    counts = []
+    code_only = "".join(s for is_code, s in segments if is_code)
+    for name in names:
+        n = len(re.findall(r"(?<![\w\.])" + re.escape(name) + r"(?![\w])", code_only))
+        if n:
+            counts.append((n * (len(name) - 3), name))
+    counts.sort(reverse=True)
+
+    for _saving, name in counts:
+        if len("".join(s for _, s in segments)) <= target:
+            break
         short = next(gen)
-        text = re.sub(r"(?<![\w\.])" + re.escape(name) + r"(?![\w])", short, text)
+        pattern = re.compile(r"(?<![\w\.])" + re.escape(name) + r"(?![\w])")
+        segments = [
+            (is_code, pattern.sub(short, s) if is_code else s) for is_code, s in segments
+        ]
         used += 1
-    return text, used
+
+    return "".join(s for _, s in segments), used
 
 
 def main():
@@ -184,9 +249,14 @@ def main():
 
     text = collapse(strip_comments(original))
     renamed = 0
+    limit = LIMIT
+    target = limit - len(BANNER) - 1
+    candidates = collect_renamable(text)
 
-    if aggressive:
-        text, renamed = rename(text, collect_renamable(text))
+    # Only rename if we do not already fit, unless forced. Every identifier left
+    # intact is one more that reads properly in an in-game error message.
+    if aggressive or len(text) > target:
+        text, renamed = rename(text, candidates, 0 if aggressive else target)
 
     text = BANNER + text + "\n"
 
@@ -198,10 +268,10 @@ def main():
     print("Minified dist/VEIN.cs -> dist/VEIN.min.cs")
     print("  %7d chars  ->  %7d chars  (%.0f%% smaller)"
           % (before, after, 100.0 * (before - after) / before))
-    if aggressive:
-        print("  %d identifiers shortened" % renamed)
+    if renamed:
+        print("  %d of %d identifiers shortened to fit; the rest keep their names"
+              % (renamed, len(candidates)))
 
-    limit = 100000
     if after <= limit:
         print("  fits the in-game editor (limit ~%d)" % limit)
     else:

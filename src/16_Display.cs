@@ -53,6 +53,8 @@ void Render(bool force = false)
         catch { /* a screen destroyed this tick must not take the script down */ }
     }
 
+    RenderSprites();
+
     if (verboseEcho) Echo(lastRender);
 }
 

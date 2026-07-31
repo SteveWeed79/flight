@@ -94,6 +94,8 @@ bool Mine(IMyTerminalBlock b)
 
 void CollectScreens()
 {
+    panels.Clear();
+
     blockScratch.Clear();
     GridTerminalSystem.GetBlocksOfType(blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
 
@@ -105,20 +107,26 @@ void CollectScreens()
         // A plain LCD panel is also a provider with one surface, so this single
         // path covers panels, cockpits and consoles alike.
         IMyTextSurface s = provider.GetSurface(0);
-        s.ContentType = ContentType.TEXT_AND_IMAGE;
-        s.Font = "Monospace";
-        s.FontSize = 0.55f;
-        s.TextPadding = 2f;
-        screens.Add(s);
+
+        // SCRIPT mode hands the surface to us for sprite drawing. Clearing Script
+        // is required — a built-in script selected in the terminal would
+        // otherwise keep repainting over everything we draw.
+        s.ContentType = ContentType.SCRIPT;
+        s.Script = "";
+        s.ScriptBackgroundColor = C_BG;
+        panels.Add(s);
     }
 
-    // The PB's own screen is free real estate — always use it.
+    // The PB's own screen is too small for the dashboard, so it keeps the text
+    // readout. It is also the one screen guaranteed to exist, which makes it the
+    // right place for the detail a graphical panel leaves out.
     if (Me.SurfaceCount > 0)
     {
         IMyTextSurface own = Me.GetSurface(0);
         own.ContentType = ContentType.TEXT_AND_IMAGE;
         own.Font = "Monospace";
         own.FontSize = 0.5f;
+        own.TextPadding = 2f;
         screens.Add(own);
     }
 }
