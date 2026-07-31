@@ -95,6 +95,9 @@ bool airspaceLock = true;
 /// <summary>Seconds a drone waits for the airspace before going anyway. A
 /// dispatcher that stops answering must not be able to park the fleet.</summary>
 double lockPatience = 60.0;
+/// <summary>Seconds a loaded drone holds off the dock waiting for a free slot
+/// before docking anyway. Same escape valve as <see cref="lockPatience"/>.</summary>
+double dockPatience = 90.0;
 
 // ---- Display --------------------------------------------------------------
 /// <summary>LCDs whose name contains this get VEIN output.</summary>
@@ -176,6 +179,7 @@ void LoadConfig()
     dockSlots     = (int)Clamp(ini.Get(S_FLEET, "dockSlots").ToInt32(1), 1, 32);
     airspaceLock  = ini.Get(S_FLEET, "airspaceLock").ToBoolean(true);
     lockPatience  = Clamp(ini.Get(S_FLEET, "lockPatience").ToDouble(60.0), 5.0, 600.0);
+    dockPatience  = Clamp(ini.Get(S_FLEET, "dockPatience").ToDouble(90.0), 5.0, 600.0);
 
     lcdTag        = ini.Get(S_DISP, "lcdTag").ToString("[VEIN]");
     verboseEcho   = ini.Get(S_DISP, "verboseEcho").ToBoolean(true);
@@ -190,6 +194,11 @@ void LoadConfig()
     // fight: the watchdog resets the state, the ship waits again, and it never
     // gets out of the hole. The wait must always lose.
     if (stateTimeout > 0) lockPatience = Math.Min(lockPatience, stateTimeout * 0.5);
+
+    // The same fight, in Inbound: a drone holding off the dock is sitting in a
+    // state the watchdog is timing, and it arrives there loaded and burning
+    // hydrogen. This wait must lose too.
+    if (stateTimeout > 0) dockPatience = Math.Min(dockPatience, stateTimeout * 0.5);
 
     // Seed the learned values, but only if nothing has been learned yet — a
     // reload to change an unrelated key must not throw away an hour of the ship
@@ -270,10 +279,13 @@ void WriteConfig()
     ini.Set(S_FLEET, "laneSpacing", laneSpacing);
     ini.SetComment(S_FLEET, "laneSpacing", "Metres between drone altitude lanes over the site. Must exceed\nthe largest drone's height by a comfortable margin. Formation only —\nexclusion is airspaceLock's job.");
     ini.Set(S_FLEET, "dockSlots", dockSlots);
+    ini.SetComment(S_FLEET, "dockSlots", "Dispatcher only: how many connectors drones may unload at. A drone\nthat arrives when they are all taken holds off the dock until one\nfrees up, or until dockPatience runs out.");
     ini.Set(S_FLEET, "airspaceLock", airspaceLock);
     ini.SetComment(S_FLEET, "airspaceLock", "One drone at a time in the airspace over the site, granted by the\ndispatcher with a queue behind it. This is what actually stops two\ndrones wanting the same hole. Ignored by a solo miner.");
     ini.Set(S_FLEET, "lockPatience", lockPatience);
     ini.SetComment(S_FLEET, "lockPatience", "Seconds a drone waits for the airspace before proceeding anyway.");
+    ini.Set(S_FLEET, "dockPatience", dockPatience);
+    ini.SetComment(S_FLEET, "dockPatience", "Seconds a loaded drone holds off the dock waiting for a free slot\nbefore docking anyway. Capped at half stateTimeout, so the wait can\nnever outlast the watchdog that is timing it.");
 
     ini.Set(S_DISP, "lcdTag", lcdTag);
     ini.Set(S_DISP, "verboseEcho", verboseEcho);

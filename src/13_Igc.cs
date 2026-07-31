@@ -64,6 +64,8 @@ void HandleMessage(long src, string body)
         case "KA": OnLockAsk(src, f); break;
         case "KG": OnLockGrant(src, f); break;
         case "KR": OnLockRelease(src, f); break;
+        case "JP": OnJobPush(src, f); break;
+        case "JA": OnJobAck(src, f); break;
         case "C":  if (f.Length > 1) HandleCommand(f[1], false); break;
     }
 }
@@ -153,16 +155,53 @@ void ReleaseLeaseLocal()
 void SendBeacon()
 {
     if (!job.IsSet) { IGC.SendBroadcastMessage(igcChannel, "B|0"); return; }
+    IGC.SendBroadcastMessage(igcChannel, "B|1" + JobFrameFields());
+}
 
-    string body = "B|1"
-        + "|" + job.Width + "|" + job.Height + "|" + job.Depth
-        + "|" + EncD(job.Spacing)
-        + "|" + EncV(job.Origin)
-        + "|" + EncV(job.Right)
-        + "|" + EncV(job.Forward)
-        + "|" + EncV(job.Down);
+/// <summary>
+/// The job frame on the wire: eight fields, always in this order. Shared by the
+/// beacon and by a miner pushing a frame up, so the two directions cannot drift
+/// apart — a frame that encodes one way and decodes the other is a fleet digging
+/// in two different places.
+/// </summary>
+string JobFrameFields()
+{
+    return "|" + job.Width + "|" + job.Height + "|" + job.Depth
+         + "|" + EncD(job.Spacing)
+         + "|" + EncV(job.Origin)
+         + "|" + EncV(job.Right)
+         + "|" + EncV(job.Forward)
+         + "|" + EncV(job.Down);
+}
 
-    IGC.SendBroadcastMessage(igcChannel, body);
+/// <summary>
+/// Decode eight frame fields starting at <paramref name="at"/> and adopt them.
+/// Cells are rebuilt only if the shape actually moved, because rebuilding throws
+/// away everything already learned about the site.
+/// </summary>
+/// <returns>False if the frame was malformed, in which case the job is cleared.</returns>
+bool AdoptJobFrame(string[] f, int at)
+{
+    // Clamped, not merely defaulted. A malformed frame carrying a zero width
+    // would otherwise produce a job with no cells at all, which reads as a
+    // finished site rather than as the corruption it is.
+    int w = Math.Max(1, ParseInt(f[at], job.Width));
+    int h = Math.Max(1, ParseInt(f[at + 1], job.Height));
+    int d = Math.Max(1, ParseInt(f[at + 2], job.Depth));
+
+    bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
+
+    job.IsSet = true;
+    job.Width = w; job.Height = h; job.Depth = d;
+    job.Spacing = DecD(f[at + 3]);
+    job.Origin = DecV(f[at + 4]);
+    job.Right = DecV(f[at + 5]);
+    job.Forward = DecV(f[at + 6]);
+    job.Down = DecV(f[at + 7]);
+
+    if (!ValidateJobBasis()) return false;
+    if (reshaped || cells.Length != job.CellCount) RebuildCells();
+    return true;
 }
 
 void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane)
@@ -211,22 +250,71 @@ void OnBeacon(long src, string[] f)
     // Adopt the dispatcher's job frame verbatim. Every drone working from the
     // same origin and axes is what makes cell indices mean the same thing to
     // everyone — without it, drone 2's cell [3,4] is somewhere else entirely.
-    int w = ParseInt(f[2], job.Width);
-    int h = ParseInt(f[3], job.Height);
-    int d = ParseInt(f[4], job.Depth);
+    AdoptJobFrame(f, 2);
+}
 
-    bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
+// ---------------------------------------------------------------------------
+//  JOB PUSH — miner to dispatcher
+//
+//  A dispatcher bolted to the base cannot anchor a job: SetJob reads the local
+//  controller's attitude and the local drill face, and a base has the wrong one
+//  of the first and none of the second. So the frame travels the other way. Fly
+//  a miner to the site, anchor it there exactly as a solo miner would, and push
+//  it up. The dispatcher adopts the frame and immediately re-beacons, so the
+//  rest of the fleet converges on it before anybody is granted a shaft.
+// ---------------------------------------------------------------------------
 
-    job.IsSet = true;
-    job.Width = w; job.Height = h; job.Depth = d;
-    job.Spacing = DecD(f[5]);
-    job.Origin = DecV(f[6]);
-    job.Right = DecV(f[7]);
-    job.Forward = DecV(f[8]);
-    job.Down = DecV(f[9]);
+void SendJobPush()
+{
+    IGC.SendUnicastMessage(dispatcherAddr, igcChannel, "JP" + JobFrameFields());
+}
 
-    if (!ValidateJobBasis()) return;
-    if (reshaped || cells.Length != job.CellCount) RebuildCells();
+void AckJobPush(long to, bool ok, string reason)
+{
+    IGC.SendUnicastMessage(to, igcChannel, "JA|" + (ok ? "1" : "0") + "|" + reason);
+}
+
+void OnJobPush(long src, string[] f)
+{
+    if (role != Role.Dispatcher) return;
+    if (f.Length < 9) { AckJobPush(src, false, "malformed"); return; }
+
+    // Adopting a frame renumbers every cell, and cell indices are the fleet's
+    // shared vocabulary. Same rule as growing the grid: never while somebody is
+    // out there holding one.
+    if (AnyCellLeased()) { AckJobPush(src, false, "leased"); return; }
+
+    if (!AdoptJobFrame(f, 1)) { AckJobPush(src, false, "badframe"); return; }
+
+    // The survey belonged to wherever the old grid was. Keeping it would report
+    // ore in cells that are now somewhere else entirely.
+    //
+    // Unconditionally, unlike the beacon path: a push is a deliberate re-anchor
+    // and the origin has almost certainly moved, but a 5x5 replacing a 5x5 is not
+    // a change of *shape*, so AdoptJobFrame on its own would leave the old map in
+    // place. This matches what SetJob does when a miner anchors locally.
+    RebuildCells();
+    activeCell = -1;
+    jobComplete = false;
+    probePassDone = false;
+    sightings.Clear();
+
+    Log("Adopted job " + job.Width + "x" + job.Height + " @" + job.Depth + "m from a miner");
+    AckJobPush(src, true, "ok");
+    SendBeacon();
+}
+
+void OnJobAck(long src, string[] f)
+{
+    if (role != Role.Miner || f.Length < 2) return;
+
+    if (f[1] == "1") { Log("Dispatcher adopted the job"); return; }
+
+    string why = f.Length > 2 ? f[2] : "refused";
+    if (why == "leased")
+        Log("Dispatcher refused the job: drones still hold shafts. Run 'stop' on it first.");
+    else
+        Log("Dispatcher refused the job: " + why);
 }
 
 void OnHeartbeat(long src, string[] f)

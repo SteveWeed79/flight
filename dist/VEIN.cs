@@ -52,7 +52,7 @@
  *//////////////////////////////////////////////////////////////////////////////
 
 const string VEIN_VERSION = "1.1.0";
-const string STORAGE_REV  = "3";   // bump on ANY change to a persisted enum or field order
+const string STORAGE_REV  = "4";   // bump on ANY change to a persisted enum or field order
 #endregion
 
 #region 01_Enums.cs
@@ -226,8 +226,6 @@ public class Job
     public Vector3D Right;
     public Vector3D Forward;
     public Vector3D Down;
-    /// <summary>Gravity at the job site, captured at set time.</summary>
-    public Vector3D Gravity;
 
     /// <summary>Shaft grid size.</summary>
     public int Width = 5;
@@ -438,6 +436,9 @@ bool airspaceLock = true;
 /// <summary>Seconds a drone waits for the airspace before going anyway. A
 /// dispatcher that stops answering must not be able to park the fleet.</summary>
 double lockPatience = 60.0;
+/// <summary>Seconds a loaded drone holds off the dock waiting for a free slot
+/// before docking anyway. Same escape valve as <see cref="lockPatience"/>.</summary>
+double dockPatience = 90.0;
 
 // ---- Display --------------------------------------------------------------
 /// <summary>LCDs whose name contains this get VEIN output.</summary>
@@ -519,6 +520,7 @@ void LoadConfig()
     dockSlots     = (int)Clamp(ini.Get(S_FLEET, "dockSlots").ToInt32(1), 1, 32);
     airspaceLock  = ini.Get(S_FLEET, "airspaceLock").ToBoolean(true);
     lockPatience  = Clamp(ini.Get(S_FLEET, "lockPatience").ToDouble(60.0), 5.0, 600.0);
+    dockPatience  = Clamp(ini.Get(S_FLEET, "dockPatience").ToDouble(90.0), 5.0, 600.0);
 
     lcdTag        = ini.Get(S_DISP, "lcdTag").ToString("[VEIN]");
     verboseEcho   = ini.Get(S_DISP, "verboseEcho").ToBoolean(true);
@@ -533,6 +535,11 @@ void LoadConfig()
     // fight: the watchdog resets the state, the ship waits again, and it never
     // gets out of the hole. The wait must always lose.
     if (stateTimeout > 0) lockPatience = Math.Min(lockPatience, stateTimeout * 0.5);
+
+    // The same fight, in Inbound: a drone holding off the dock is sitting in a
+    // state the watchdog is timing, and it arrives there loaded and burning
+    // hydrogen. This wait must lose too.
+    if (stateTimeout > 0) dockPatience = Math.Min(dockPatience, stateTimeout * 0.5);
 
     // Seed the learned values, but only if nothing has been learned yet — a
     // reload to change an unrelated key must not throw away an hour of the ship
@@ -613,10 +620,13 @@ void WriteConfig()
     ini.Set(S_FLEET, "laneSpacing", laneSpacing);
     ini.SetComment(S_FLEET, "laneSpacing", "Metres between drone altitude lanes over the site. Must exceed\nthe largest drone's height by a comfortable margin. Formation only —\nexclusion is airspaceLock's job.");
     ini.Set(S_FLEET, "dockSlots", dockSlots);
+    ini.SetComment(S_FLEET, "dockSlots", "Dispatcher only: how many connectors drones may unload at. A drone\nthat arrives when they are all taken holds off the dock until one\nfrees up, or until dockPatience runs out.");
     ini.Set(S_FLEET, "airspaceLock", airspaceLock);
     ini.SetComment(S_FLEET, "airspaceLock", "One drone at a time in the airspace over the site, granted by the\ndispatcher with a queue behind it. This is what actually stops two\ndrones wanting the same hole. Ignored by a solo miner.");
     ini.Set(S_FLEET, "lockPatience", lockPatience);
     ini.SetComment(S_FLEET, "lockPatience", "Seconds a drone waits for the airspace before proceeding anyway.");
+    ini.Set(S_FLEET, "dockPatience", dockPatience);
+    ini.SetComment(S_FLEET, "dockPatience", "Seconds a loaded drone holds off the dock waiting for a free slot\nbefore docking anyway. Capped at half stateTimeout, so the wait can\nnever outlast the watchdog that is timing it.");
 
     ini.Set(S_DISP, "lcdTag", lcdTag);
     ini.Set(S_DISP, "verboseEcho", verboseEcho);
@@ -2214,7 +2224,16 @@ bool FuelCriticalForReturn()
 
 bool ServiceComplete()
 {
-    return batteryFill >= resumeBattery && hydrogenFill >= resumeHydrogen;
+    if (batteryFill < resumeBattery) return false;
+    if (hydrogenFill < resumeHydrogen) return false;
+
+    // Uranium too, because HasReservesForWork gates on it. Leaving without it
+    // means failing that check on the way out and turning straight back — an
+    // undock/dock loop that burns hydrogen and never reaches the rock. Better to
+    // wait at the connector where the uranium actually is.
+    if (reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium) return false;
+
+    return true;
 }
 #endregion
 
@@ -2239,7 +2258,15 @@ bool ServiceComplete()
 /// </summary>
 void SetJob(int width, int height, int depth)
 {
-    if (controller == null) { Log("Cannot set job: no controller"); return; }
+    if (controller == null)
+    {
+        // The usual way to land here is running this on a dispatcher bolted to a
+        // base, which has no remote control and no drills to derive a pitch from.
+        Log(role == Role.Dispatcher
+            ? "Cannot set job here: no controller. Anchor it on a miner and run 'job push'."
+            : "Cannot set job: no controller");
+        return;
+    }
 
     MatrixD m = controller.WorldMatrix;
 
@@ -2248,7 +2275,6 @@ void SetJob(int width, int height, int depth)
     job.Down = Vector3D.Normalize(m.Forward);     // drills point forward
     job.Right = Vector3D.Normalize(m.Right);
     job.Forward = Vector3D.Normalize(m.Up);
-    job.Gravity = gravity;
     job.Width = Math.Max(1, width);
     job.Height = Math.Max(1, height);
     job.Depth = Math.Max(1, depth);
@@ -2636,6 +2662,16 @@ double SightingBonus(int col, int row)
 /// <summary>Cells added to an edge that is still rich.</summary>
 const int GROW_STEP = 2;
 
+/// <summary>Is any shaft currently on loan to a drone? Anything that renumbers
+/// cells has to check this first — indices are the fleet's shared vocabulary,
+/// and moving them under a drone that holds one sends it to the wrong rock.</summary>
+bool AnyCellLeased()
+{
+    for (int i = 0; i < cells.Length; i++)
+        if (cells[i].State == CellState.Leased) return true;
+    return false;
+}
+
 /// <summary>
 /// Extend the grid toward ore that runs off the edge of it.
 /// </summary>
@@ -2650,8 +2686,7 @@ bool GrowJobTowardOre()
 
     // Cell indices are the fleet's shared vocabulary and they are about to
     // change. Never while somebody is out there holding one.
-    for (int i = 0; i < cells.Length; i++)
-        if (cells[i].State == CellState.Leased) return false;
+    if (AnyCellLeased()) return false;
 
     int dl = EdgeStillRich(0) ? GROW_STEP : 0;
     int dr = EdgeStillRich(1) ? GROW_STEP : 0;
@@ -2889,6 +2924,34 @@ void CaptureHomeDock()
         homeDockUp = m.Up;
     }
     homeDockSet = true;
+}
+
+/// <summary>
+/// Re-anchor the dock without touching the rest of the route.
+///
+/// The dock frame is otherwise a one-shot snapshot taken by StartRecording, so
+/// repositioning a connector meant re-flying and re-recording the entire route
+/// to change the last five metres of it. This re-takes the frame and waypoint
+/// zero — the controller's position while mated — and leaves every other
+/// waypoint exactly where it is.
+///
+/// It re-anchors the approach, not the route. If the base moved far enough that
+/// the recorded path no longer arrives near it, the path is wrong as well and
+/// wants recording properly.
+/// </summary>
+void RecaptureDock()
+{
+    CaptureHomeDock();
+
+    Waypoint w = new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift());
+    if (path.Count == 0) path.Add(w);
+    else path[0] = w;
+
+    // Both are derived from the waypoints and one of those just moved.
+    BuildPathDistances();
+    ComputeMaxFlyableMass();
+
+    Log("Dock re-anchored, " + path.Count + " waypoints kept");
 }
 
 /// <summary>Called every tick while recording.</summary>
@@ -3617,10 +3680,25 @@ void StInbound(bool entry)
         // which the lanes exist to separate. Holding the site lock all the way
         // home would serialise the whole fleet for no benefit.
         ReleaseAirspace();
+        ResetDockWait();
         if (HasDispatcher) RequestDock();
     }
 
-    if (FollowPath(false)) SetState(MinerState.Docking);
+    if (!FollowPath(false)) return;
+
+    // End of the route, but the connector may still be somebody else's. Hold
+    // off rather than crowding the pad — squared up on the mating axis, so the
+    // approach starts from the right attitude the moment the slot arrives.
+    if (!AcquireDockSlot())
+    {
+        statusLine = "Waiting for a dock slot";
+        if (dockHoldPoint == Vector3D.Zero) dockHoldPoint = shipPos;
+        FlyTo(dockHoldPoint, dockSpeed);
+        if (homeDockSet) Orient(-homeDockForward, homeDockUp);
+        return;
+    }
+
+    SetState(MinerState.Docking);
 }
 
 // ---------------------------------------------------------------------------
@@ -3771,7 +3849,13 @@ void StServicing(bool entry)
 
     if (!ServiceComplete())
     {
-        statusLine = "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
+        // Name uranium when it is the one holding us. A base with none to give
+        // holds the ship here indefinitely, and Servicing is exempt from the
+        // watchdog, so a wait that does not say why is indistinguishable from a
+        // hang. The other two always finish on their own.
+        statusLine = reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium
+            ? "Waiting for uranium " + Fmt(uraniumKg, 1) + "/" + Fmt(minUranium, 1) + "kg"
+            : "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
         return;
     }
 
@@ -4265,6 +4349,8 @@ void HandleMessage(long src, string body)
         case "KA": OnLockAsk(src, f); break;
         case "KG": OnLockGrant(src, f); break;
         case "KR": OnLockRelease(src, f); break;
+        case "JP": OnJobPush(src, f); break;
+        case "JA": OnJobAck(src, f); break;
         case "C":  if (f.Length > 1) HandleCommand(f[1], false); break;
     }
 }
@@ -4354,16 +4440,53 @@ void ReleaseLeaseLocal()
 void SendBeacon()
 {
     if (!job.IsSet) { IGC.SendBroadcastMessage(igcChannel, "B|0"); return; }
+    IGC.SendBroadcastMessage(igcChannel, "B|1" + JobFrameFields());
+}
 
-    string body = "B|1"
-        + "|" + job.Width + "|" + job.Height + "|" + job.Depth
-        + "|" + EncD(job.Spacing)
-        + "|" + EncV(job.Origin)
-        + "|" + EncV(job.Right)
-        + "|" + EncV(job.Forward)
-        + "|" + EncV(job.Down);
+/// <summary>
+/// The job frame on the wire: eight fields, always in this order. Shared by the
+/// beacon and by a miner pushing a frame up, so the two directions cannot drift
+/// apart — a frame that encodes one way and decodes the other is a fleet digging
+/// in two different places.
+/// </summary>
+string JobFrameFields()
+{
+    return "|" + job.Width + "|" + job.Height + "|" + job.Depth
+         + "|" + EncD(job.Spacing)
+         + "|" + EncV(job.Origin)
+         + "|" + EncV(job.Right)
+         + "|" + EncV(job.Forward)
+         + "|" + EncV(job.Down);
+}
 
-    IGC.SendBroadcastMessage(igcChannel, body);
+/// <summary>
+/// Decode eight frame fields starting at <paramref name="at"/> and adopt them.
+/// Cells are rebuilt only if the shape actually moved, because rebuilding throws
+/// away everything already learned about the site.
+/// </summary>
+/// <returns>False if the frame was malformed, in which case the job is cleared.</returns>
+bool AdoptJobFrame(string[] f, int at)
+{
+    // Clamped, not merely defaulted. A malformed frame carrying a zero width
+    // would otherwise produce a job with no cells at all, which reads as a
+    // finished site rather than as the corruption it is.
+    int w = Math.Max(1, ParseInt(f[at], job.Width));
+    int h = Math.Max(1, ParseInt(f[at + 1], job.Height));
+    int d = Math.Max(1, ParseInt(f[at + 2], job.Depth));
+
+    bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
+
+    job.IsSet = true;
+    job.Width = w; job.Height = h; job.Depth = d;
+    job.Spacing = DecD(f[at + 3]);
+    job.Origin = DecV(f[at + 4]);
+    job.Right = DecV(f[at + 5]);
+    job.Forward = DecV(f[at + 6]);
+    job.Down = DecV(f[at + 7]);
+
+    if (!ValidateJobBasis()) return false;
+    if (reshaped || cells.Length != job.CellCount) RebuildCells();
+    return true;
 }
 
 void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane)
@@ -4412,22 +4535,71 @@ void OnBeacon(long src, string[] f)
     // Adopt the dispatcher's job frame verbatim. Every drone working from the
     // same origin and axes is what makes cell indices mean the same thing to
     // everyone — without it, drone 2's cell [3,4] is somewhere else entirely.
-    int w = ParseInt(f[2], job.Width);
-    int h = ParseInt(f[3], job.Height);
-    int d = ParseInt(f[4], job.Depth);
+    AdoptJobFrame(f, 2);
+}
 
-    bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
+// ---------------------------------------------------------------------------
+//  JOB PUSH — miner to dispatcher
+//
+//  A dispatcher bolted to the base cannot anchor a job: SetJob reads the local
+//  controller's attitude and the local drill face, and a base has the wrong one
+//  of the first and none of the second. So the frame travels the other way. Fly
+//  a miner to the site, anchor it there exactly as a solo miner would, and push
+//  it up. The dispatcher adopts the frame and immediately re-beacons, so the
+//  rest of the fleet converges on it before anybody is granted a shaft.
+// ---------------------------------------------------------------------------
 
-    job.IsSet = true;
-    job.Width = w; job.Height = h; job.Depth = d;
-    job.Spacing = DecD(f[5]);
-    job.Origin = DecV(f[6]);
-    job.Right = DecV(f[7]);
-    job.Forward = DecV(f[8]);
-    job.Down = DecV(f[9]);
+void SendJobPush()
+{
+    IGC.SendUnicastMessage(dispatcherAddr, igcChannel, "JP" + JobFrameFields());
+}
 
-    if (!ValidateJobBasis()) return;
-    if (reshaped || cells.Length != job.CellCount) RebuildCells();
+void AckJobPush(long to, bool ok, string reason)
+{
+    IGC.SendUnicastMessage(to, igcChannel, "JA|" + (ok ? "1" : "0") + "|" + reason);
+}
+
+void OnJobPush(long src, string[] f)
+{
+    if (role != Role.Dispatcher) return;
+    if (f.Length < 9) { AckJobPush(src, false, "malformed"); return; }
+
+    // Adopting a frame renumbers every cell, and cell indices are the fleet's
+    // shared vocabulary. Same rule as growing the grid: never while somebody is
+    // out there holding one.
+    if (AnyCellLeased()) { AckJobPush(src, false, "leased"); return; }
+
+    if (!AdoptJobFrame(f, 1)) { AckJobPush(src, false, "badframe"); return; }
+
+    // The survey belonged to wherever the old grid was. Keeping it would report
+    // ore in cells that are now somewhere else entirely.
+    //
+    // Unconditionally, unlike the beacon path: a push is a deliberate re-anchor
+    // and the origin has almost certainly moved, but a 5x5 replacing a 5x5 is not
+    // a change of *shape*, so AdoptJobFrame on its own would leave the old map in
+    // place. This matches what SetJob does when a miner anchors locally.
+    RebuildCells();
+    activeCell = -1;
+    jobComplete = false;
+    probePassDone = false;
+    sightings.Clear();
+
+    Log("Adopted job " + job.Width + "x" + job.Height + " @" + job.Depth + "m from a miner");
+    AckJobPush(src, true, "ok");
+    SendBeacon();
+}
+
+void OnJobAck(long src, string[] f)
+{
+    if (role != Role.Miner || f.Length < 2) return;
+
+    if (f[1] == "1") { Log("Dispatcher adopted the job"); return; }
+
+    string why = f.Length > 2 ? f[2] : "refused";
+    if (why == "leased")
+        Log("Dispatcher refused the job: drones still hold shafts. Run 'stop' on it first.");
+    else
+        Log("Dispatcher refused the job: " + why);
 }
 
 void OnHeartbeat(long src, string[] f)
@@ -5307,7 +5479,7 @@ void CmdReset()
 
 void CmdRecord(string[] a)
 {
-    if (a.Length < 2) { Log("record start | stop | clear"); return; }
+    if (a.Length < 2) { Log("record start | stop | clear | dock"); return; }
 
     switch (a[1])
     {
@@ -5325,8 +5497,15 @@ void CmdRecord(string[] a)
             maxFlyableMass = -1;
             Log("Path cleared");
             break;
+        case "dock":
+            // Moving a connector should not cost you the whole route.
+            if (!Docked) { Log("Not docked — 'record dock' captures a live mated frame"); return; }
+            if (path.Count == 0) { Log("No route to re-anchor — use 'record start' first"); return; }
+            RecaptureDock();
+            break;
+
         default:
-            Log("record start | stop | clear");
+            Log("record start | stop | clear | dock");
             break;
     }
 }
@@ -5335,7 +5514,7 @@ void CmdJob(string[] a)
 {
     if (a.Length < 2)
     {
-        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here");
+        Log("job set <w> <h> <depth> | job depth <m> | job size <w> <h> | job here | job push");
         return;
     }
 
@@ -5380,8 +5559,17 @@ void CmdJob(string[] a)
             if (role == Role.Dispatcher) SendBeacon();
             break;
 
+        case "push":
+            // How a base-mounted dispatcher gets a frame it cannot anchor itself.
+            if (role != Role.Miner) { Log("Only a miner can push a job"); return; }
+            if (!job.IsSet) { Log("Nothing to push — set a job here first"); return; }
+            if (dispatcherAddr == 0) { Log("No dispatcher on channel '" + igcChannel + "'"); return; }
+            SendJobPush();
+            Log("Job pushed to the dispatcher");
+            break;
+
         default:
-            Log("job set | here | size | depth");
+            Log("job set | here | size | depth | push");
             break;
     }
 }
@@ -5419,19 +5607,18 @@ string SerializeState()
     b.Append("A|").Append(EncD(learnedDrillSpeed))
      .Append('|').Append(EncD(brakeDerate))
      .Append('|').Append(brakeSamples)
+     // The burn rate, stored per KILOMETRE. EncD scales by 1000 and truncates to
+     // a long, and a rate is order 1e-5 of a tank per metre — per metre it would
+     // save as a flat zero every time. Zero doubles as "not yet calibrated",
+     // which it cannot be confused with: a measured rate is always positive.
+     .Append('|').Append(EncD(hydroCalibrated ? hydroPerMetre * 1000.0 : 0))
      .Append('\n');
 
     if (job.IsSet)
     {
-        b.Append("J|").Append(job.Width)
-         .Append('|').Append(job.Height)
-         .Append('|').Append(job.Depth)
-         .Append('|').Append(EncD(job.Spacing))
-         .Append('|').Append(EncV(job.Origin))
-         .Append('|').Append(EncV(job.Right))
-         .Append('|').Append(EncV(job.Forward))
-         .Append('|').Append(EncV(job.Down))
-         .Append('\n');
+        // Same eight fields, same order, same encoder as the IGC beacon. One
+        // layout with two writers is a layout that drifts.
+        b.Append("J").Append(JobFrameFields()).Append('\n');
     }
 
     // ---- Yield map ---------------------------------------------------------
@@ -5510,7 +5697,7 @@ void LoadState()
                     break;
 
                 case "A":
-                    if (!versionOk || f.Length < 4) break;
+                    if (!versionOk || f.Length < 5) break;
                     LoadLearned(f);
                     break;
 
@@ -5584,22 +5771,21 @@ void LoadLearned(string[] f)
     if (cut > 0) learnedDrillSpeed = Clamp(cut, DrillSpeedFloor, DrillSpeedCap);
     if (derate > 0) brakeDerate = Clamp(derate, 0.30, 0.85);
     brakeSamples = Math.Max(0, ParseInt(f[3], 0));
+
+    // Back to per metre. Worth keeping across a recompile: it takes several
+    // 150-metre legs to measure, and until it is measured FuelToGetHome returns
+    // zero and the ship flies home with no fuel reserve check at all.
+    double perKm = DecD(f[4]);
+    if (perKm > 0) { hydroPerMetre = perKm / 1000.0; hydroCalibrated = true; }
 }
 
 void LoadJob(string[] f)
 {
-    job.IsSet = true;
-    job.Width = Math.Max(1, ParseInt(f[1], 5));
-    job.Height = Math.Max(1, ParseInt(f[2], 5));
-    job.Depth = Math.Max(1, ParseInt(f[3], 40));
-    job.Spacing = DecD(f[4]);
-    job.Origin = DecV(f[5]);
-    job.Right = DecV(f[6]);
-    job.Forward = DecV(f[7]);
-    job.Down = DecV(f[8]);
-
-    if (!ValidateJobBasis()) return;
-    RebuildCells();
+    // The shared decoder, at the same offset a job push uses. It validates the
+    // basis and rebuilds the cells for us: job.IsSet is false on a cold load, so
+    // its "reshaped" branch always fires — which the C record parsed after this
+    // one depends on, since it indexes into that array.
+    AdoptJobFrame(f, 1);
 }
 
 void LoadCells(string[] f)
@@ -6358,6 +6544,75 @@ bool AcquireAirspace(string section)
         lockAskTick = tick;
     }
     return false;
+}
+
+// ---- Dock slots -----------------------------------------------------------
+//
+//  The fourth mechanism, and until now the only one that was not actually
+//  enforced. The dispatcher allocated slot numbers, answered -1 when they were
+//  all taken, and expired them when a drone went quiet — but nothing on the
+//  drone ever waited for the answer. A drone told to hold off flew the mating
+//  run anyway, which is precisely the collision the slot exists to prevent.
+//
+//  No queue here, unlike the lock. The dispatcher re-grants a slot the asker
+//  already holds and otherwise answers -1, so a drone simply asks again.
+
+/// <summary>Tick we started waiting for a slot. Zero when not waiting.</summary>
+long dockWaitTick;
+/// <summary>Tick of our last ask, for re-ask backoff.</summary>
+long dockAskTick;
+/// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
+bool dockOverridden;
+/// <summary>Where we parked while waiting. Captured once, so the ship holds a
+/// fixed point instead of drifting on whatever it was doing when it stopped.</summary>
+Vector3D dockHoldPoint;
+
+/// <summary>
+/// May we start the mating run?
+///
+/// True immediately for a solo miner — the connector is nobody else's — and
+/// true once the dispatcher has granted a slot. Otherwise it re-asks
+/// periodically and returns false so the caller can hold station.
+///
+/// Bounded like the airspace lock, and for a sharper version of the same
+/// reason: a dispatcher that has stopped answering must not be able to hold a
+/// fleet of loaded ships in the air outside their own base, burning the
+/// hydrogen they need to land.
+/// </summary>
+bool AcquireDockSlot()
+{
+    if (!HasDispatcher) return true;
+    if (myDockSlot >= 0) return true;
+
+    if (dockWaitTick == 0) dockWaitTick = tick;
+
+    if (tick - dockWaitTick > (long)(dockPatience / Math.Max(dt, 0.01)))
+    {
+        if (!dockOverridden)
+        {
+            dockOverridden = true;
+            Log("No dock slot granted — docking anyway");
+        }
+        return true;
+    }
+
+    // Re-ask, because a request dropped by the per-tick message cap must not
+    // strand a loaded ship short of its own connector.
+    if (dockAskTick == 0 || tick - dockAskTick > 60)
+    {
+        RequestDock();
+        dockAskTick = tick;
+    }
+    return false;
+}
+
+/// <summary>Forget any slot wait. Called when a return leg begins.</summary>
+void ResetDockWait()
+{
+    dockWaitTick = 0;
+    dockAskTick = 0;
+    dockOverridden = false;
+    dockHoldPoint = Vector3D.Zero;
 }
 
 /// <summary>Give the section back. Safe to call when we hold nothing.</summary>

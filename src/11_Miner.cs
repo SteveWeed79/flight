@@ -501,10 +501,25 @@ void StInbound(bool entry)
         // which the lanes exist to separate. Holding the site lock all the way
         // home would serialise the whole fleet for no benefit.
         ReleaseAirspace();
+        ResetDockWait();
         if (HasDispatcher) RequestDock();
     }
 
-    if (FollowPath(false)) SetState(MinerState.Docking);
+    if (!FollowPath(false)) return;
+
+    // End of the route, but the connector may still be somebody else's. Hold
+    // off rather than crowding the pad — squared up on the mating axis, so the
+    // approach starts from the right attitude the moment the slot arrives.
+    if (!AcquireDockSlot())
+    {
+        statusLine = "Waiting for a dock slot";
+        if (dockHoldPoint == Vector3D.Zero) dockHoldPoint = shipPos;
+        FlyTo(dockHoldPoint, dockSpeed);
+        if (homeDockSet) Orient(-homeDockForward, homeDockUp);
+        return;
+    }
+
+    SetState(MinerState.Docking);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +670,13 @@ void StServicing(bool entry)
 
     if (!ServiceComplete())
     {
-        statusLine = "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
+        // Name uranium when it is the one holding us. A base with none to give
+        // holds the ship here indefinitely, and Servicing is exempt from the
+        // watchdog, so a wait that does not say why is indistinguishable from a
+        // hang. The other two always finish on their own.
+        statusLine = reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium
+            ? "Waiting for uranium " + Fmt(uraniumKg, 1) + "/" + Fmt(minUranium, 1) + "kg"
+            : "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
         return;
     }
 

@@ -129,10 +129,22 @@ Optional. A single miner works fine forever.
 
 1. Put a Programmable Block at your base with the same script.
 2. In its Custom Data set `role = Dispatcher`, and `dockSlots` to the number of
-   connectors miners can unload at.
-3. Run `reload`, then define the job **from the dispatcher** — either fly a ship
-   there and use `job set`, or set the job on a miner and copy the values.
-4. Run `start` on the dispatcher.
+   connectors miners can unload at. Drones that arrive when the connectors are
+   all busy hold station off the pad until one frees up, so this needs to match
+   reality — set it to the number of pads you actually have.
+3. Run `reload` on it.
+4. Give it a job. A dispatcher at a base cannot anchor one itself — `job set`
+   reads the local remote control's attitude and the local drill face, and a base
+   has the wrong one of the first and none of the second. So set it on a **miner**
+   instead: fly the miner to the site, `job set 5 5 40` as usual, then
+
+   ```
+   job push
+   ```
+
+   The dispatcher adopts the frame, says so in its log, and re-beacons it to
+   every drone on the channel. The miner reports whether it was accepted.
+5. Run `start` on the dispatcher.
 
 Every miner on the same `channel` joins automatically. No pairing step. Each gets
 its own altitude lane over the site and its own shaft assignments.
@@ -142,6 +154,20 @@ coordinates *what* to dig, not *how to get there*.
 
 To stop the whole operation, run `stop` on the dispatcher — drones finish what
 they hold and come home. `fleet stop` relays the command to the drones directly.
+
+**Moving the site later** is the same `job push`, but the dispatcher refuses one
+while any drone still holds a shaft — adopting a frame renumbers every cell, and
+a drone holding index 7 would fly to whatever is index 7 on the new grid. Run
+`stop` on the dispatcher, let the drones come home, then push. The refusal says
+which case it was.
+
+### Running more than one squad
+
+Each dispatcher owns one site and one channel. For a second crew working a second
+deposit, set both that dispatcher and its miners to a different `channel` — say
+`VEIN-B` — and the two operations ignore each other completely. Miners only ever
+join a dispatcher on their own channel, and a miner that hears a second
+dispatcher on *its* channel logs it and stays with the first.
 
 ---
 
@@ -172,6 +198,18 @@ concluded there was nothing worth digging. Check `probeDepth`, then
 
 **It will not dock.** The recorded dock position comes from waypoint zero, so
 `record start` must be run **while actually docked**. Re-record if in doubt.
+
+If you have only *moved the connector*, you do not need the whole route again.
+Dock at the new one and run:
+
+```
+record dock
+```
+
+That re-takes the dock frame and waypoint zero and keeps every other waypoint,
+which is what you want when a connector shifted a few blocks. It re-anchors the
+approach, not the route — if the base moved far enough that the recorded path no
+longer arrives near it, the path is wrong too and wants `record start` again.
 
 **"Script too complex."** Turn off `verboseEcho`, use a smaller job grid, or fewer
 LCDs. Watch the Load line — sustained above 80% is the warning sign.

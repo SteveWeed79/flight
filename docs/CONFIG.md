@@ -125,9 +125,10 @@ Only meaningful with a dispatcher.
 |---|---|---|
 | `droneTimeout` | `30.0` | Seconds of silence before a drone is presumed lost and its shaft reissued. |
 | `laneSpacing` | `12.0` | Metres between drone altitude lanes over the site. |
-| `dockSlots` | `1` | Dispatcher only: how many connectors are available for unloading. |
+| `dockSlots` | `1` | Dispatcher only: how many connectors drones may unload at. A drone that arrives when they are all taken holds off until one frees up. |
 | `airspaceLock` | `true` | One drone at a time in the airspace over the site, granted by the dispatcher with a queue behind it. |
 | `lockPatience` | `60.0` | Seconds a drone waits for the airspace before going anyway. Capped at half `stateTimeout`. |
+| `dockPatience` | `90.0` | Seconds a loaded drone holds off the dock waiting for a free slot before docking anyway. Capped at half `stateTimeout`. |
 
 **`laneSpacing` must comfortably exceed the tallest drone's height.** Lanes are
 formation, not exclusion: they stop two drones cruising at the same height, and
@@ -144,6 +145,21 @@ hand if it ever comes to that.
 **`lockPatience` is a safety valve, not a tuning knob.** A dispatcher that stops
 answering must not be able to park the whole fleet in mid-air, so a drone that
 has waited this long proceeds on lanes alone and says so in the log.
+
+**`dockSlots` is enforced from 1.2 on.** Before that the dispatcher allocated
+slot numbers and answered "all full" correctly, but nothing on the drone waited
+for the reply — a drone told to hold off flew the mating run anyway, which is
+exactly the collision the setting exists to prevent. A drone now holds station
+off the pad, squared up on the mating axis, until a slot frees.
+
+Set it to the number of connectors drones can actually unload at. Leaving it at
+`1` with three connectors simply serialises unloading; setting it to `3` with one
+connector puts three ships on one pad, which is the failure it is meant to stop.
+
+**`dockPatience` is the same safety valve as `lockPatience`,** and matters more:
+a drone waiting for airspace is empty and over the site, while a drone waiting
+for a slot is loaded and burning hydrogen outside its own base. It is capped at
+half `stateTimeout` so the wait always loses to the watchdog timing it.
 
 ---
 

@@ -18,7 +18,15 @@
 /// </summary>
 void SetJob(int width, int height, int depth)
 {
-    if (controller == null) { Log("Cannot set job: no controller"); return; }
+    if (controller == null)
+    {
+        // The usual way to land here is running this on a dispatcher bolted to a
+        // base, which has no remote control and no drills to derive a pitch from.
+        Log(role == Role.Dispatcher
+            ? "Cannot set job here: no controller. Anchor it on a miner and run 'job push'."
+            : "Cannot set job: no controller");
+        return;
+    }
 
     MatrixD m = controller.WorldMatrix;
 
@@ -27,7 +35,6 @@ void SetJob(int width, int height, int depth)
     job.Down = Vector3D.Normalize(m.Forward);     // drills point forward
     job.Right = Vector3D.Normalize(m.Right);
     job.Forward = Vector3D.Normalize(m.Up);
-    job.Gravity = gravity;
     job.Width = Math.Max(1, width);
     job.Height = Math.Max(1, height);
     job.Depth = Math.Max(1, depth);
@@ -415,6 +422,16 @@ double SightingBonus(int col, int row)
 /// <summary>Cells added to an edge that is still rich.</summary>
 const int GROW_STEP = 2;
 
+/// <summary>Is any shaft currently on loan to a drone? Anything that renumbers
+/// cells has to check this first — indices are the fleet's shared vocabulary,
+/// and moving them under a drone that holds one sends it to the wrong rock.</summary>
+bool AnyCellLeased()
+{
+    for (int i = 0; i < cells.Length; i++)
+        if (cells[i].State == CellState.Leased) return true;
+    return false;
+}
+
 /// <summary>
 /// Extend the grid toward ore that runs off the edge of it.
 /// </summary>
@@ -429,8 +446,7 @@ bool GrowJobTowardOre()
 
     // Cell indices are the fleet's shared vocabulary and they are about to
     // change. Never while somebody is out there holding one.
-    for (int i = 0; i < cells.Length; i++)
-        if (cells[i].State == CellState.Leased) return false;
+    if (AnyCellLeased()) return false;
 
     int dl = EdgeStillRich(0) ? GROW_STEP : 0;
     int dr = EdgeStillRich(1) ? GROW_STEP : 0;

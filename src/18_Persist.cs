@@ -29,19 +29,18 @@ string SerializeState()
     b.Append("A|").Append(EncD(learnedDrillSpeed))
      .Append('|').Append(EncD(brakeDerate))
      .Append('|').Append(brakeSamples)
+     // The burn rate, stored per KILOMETRE. EncD scales by 1000 and truncates to
+     // a long, and a rate is order 1e-5 of a tank per metre — per metre it would
+     // save as a flat zero every time. Zero doubles as "not yet calibrated",
+     // which it cannot be confused with: a measured rate is always positive.
+     .Append('|').Append(EncD(hydroCalibrated ? hydroPerMetre * 1000.0 : 0))
      .Append('\n');
 
     if (job.IsSet)
     {
-        b.Append("J|").Append(job.Width)
-         .Append('|').Append(job.Height)
-         .Append('|').Append(job.Depth)
-         .Append('|').Append(EncD(job.Spacing))
-         .Append('|').Append(EncV(job.Origin))
-         .Append('|').Append(EncV(job.Right))
-         .Append('|').Append(EncV(job.Forward))
-         .Append('|').Append(EncV(job.Down))
-         .Append('\n');
+        // Same eight fields, same order, same encoder as the IGC beacon. One
+        // layout with two writers is a layout that drifts.
+        b.Append("J").Append(JobFrameFields()).Append('\n');
     }
 
     // ---- Yield map ---------------------------------------------------------
@@ -120,7 +119,7 @@ void LoadState()
                     break;
 
                 case "A":
-                    if (!versionOk || f.Length < 4) break;
+                    if (!versionOk || f.Length < 5) break;
                     LoadLearned(f);
                     break;
 
@@ -194,22 +193,21 @@ void LoadLearned(string[] f)
     if (cut > 0) learnedDrillSpeed = Clamp(cut, DrillSpeedFloor, DrillSpeedCap);
     if (derate > 0) brakeDerate = Clamp(derate, 0.30, 0.85);
     brakeSamples = Math.Max(0, ParseInt(f[3], 0));
+
+    // Back to per metre. Worth keeping across a recompile: it takes several
+    // 150-metre legs to measure, and until it is measured FuelToGetHome returns
+    // zero and the ship flies home with no fuel reserve check at all.
+    double perKm = DecD(f[4]);
+    if (perKm > 0) { hydroPerMetre = perKm / 1000.0; hydroCalibrated = true; }
 }
 
 void LoadJob(string[] f)
 {
-    job.IsSet = true;
-    job.Width = Math.Max(1, ParseInt(f[1], 5));
-    job.Height = Math.Max(1, ParseInt(f[2], 5));
-    job.Depth = Math.Max(1, ParseInt(f[3], 40));
-    job.Spacing = DecD(f[4]);
-    job.Origin = DecV(f[5]);
-    job.Right = DecV(f[6]);
-    job.Forward = DecV(f[7]);
-    job.Down = DecV(f[8]);
-
-    if (!ValidateJobBasis()) return;
-    RebuildCells();
+    // The shared decoder, at the same offset a job push uses. It validates the
+    // basis and rebuilds the cells for us: job.IsSet is false on a cold load, so
+    // its "reshaped" branch always fires — which the C record parsed after this
+    // one depends on, since it indexes into that array.
+    AdoptJobFrame(f, 1);
 }
 
 void LoadCells(string[] f)
