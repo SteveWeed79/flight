@@ -1476,6 +1476,13 @@ void FlyTo(Vector3D target, double maxSpeed)
     double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BRAKE_DERATE;
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
+
+    // Do not travel fast while still swinging round. PAM does the same thing and
+    // the reason is practical: the drills point along the ship's forward axis,
+    // so a badly misaligned ship at speed is carrying its most fragile face
+    // sideways into whatever it is approaching. Full speed by 20 degrees.
+    if (alignError > 20.0) want *= Math.Max(0.15, 1.0 - (alignError - 20.0) / 70.0);
+
     // Never command more than the server will honour anyway.
     want = Math.Min(want, 95.0);
 
@@ -1593,6 +1600,19 @@ void Orient(Vector3D desiredForward, Vector3D desiredUp)
 
     alignError = ToDegrees(Math.Acos(Clamp(Vector3D.Dot(m.Forward, desiredForward), -1.0, 1.0)));
 
+    // A cross product has magnitude sin(angle), so it vanishes at 180 degrees
+    // exactly as it does at zero. Pointed at precisely the opposite direction —
+    // rejoining a recorded route that runs back past the ship, or a dock
+    // approach that needs a reversal — both terms cancel, the command is zero,
+    // and the ship sits there perfectly still at maximum error until the
+    // watchdog gives up. Nudge it off the singularity with any perpendicular
+    // axis; one tick later the normal control has a gradient to work with.
+    if (errAxis.LengthSquared() < 1e-6 && alignError > 90.0)
+    {
+        Vector3D seed = Math.Abs(m.Forward.Z) < 0.9 ? Vector3D.Forward : Vector3D.Right;
+        errAxis = Vector3D.Normalize(Vector3D.Cross(m.Forward, seed));
+    }
+
     Vector3D angVel = controller.GetShipVelocities().AngularVelocity;
 
     // PD. The derivative term is what stops a big ship wallowing past the target
@@ -1601,7 +1621,11 @@ void Orient(Vector3D desiredForward, Vector3D desiredUp)
     const double KD = 0.55;
     Vector3D command = errAxis * KP - angVel * KD;
 
-    double maxRate = isLargeGrid ? 0.9 : 2.0;   // rad/s
+    // PAM separates these by a factor of three — 15 for small grids against 5
+    // for large — where an earlier version of this used barely half that. A
+    // large grid carries enormously more rotational inertia and will overshoot
+    // and hunt on a gain that suits a small one.
+    double maxRate = isLargeGrid ? 0.6 : 1.8;   // rad/s
     if (command.Length() > maxRate) command = Vector3D.Normalize(command) * maxRate;
 
     ApplyGyros(command);
