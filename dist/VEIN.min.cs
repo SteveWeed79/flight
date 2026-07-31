@@ -87,11 +87,11 @@ public int Height = 5;
 public int Depth = 40;
 public double Spacing = 2.4;
 public Job() { }
-public Vector3D CellMouth(int col, int row, double _ag)
+public Vector3D CellMouth(int col, int row, double _ah)
 {
 double cx = (col - (Width - 1) * 0.5) * Spacing;
 double cy = (row - (Height - 1) * 0.5) * Spacing;
-return Origin + Right * cx + Forward * cy - Down * _ag;
+return Origin + Right * cx + Forward * cy - Down * _ah;
 }
 public Vector3D CellDepth(int col, int row, double depth)
 {
@@ -158,7 +158,7 @@ HoleOrder holeOrder = HoleOrder.Prospect;
 EjectMode ejectMode = EjectMode.Stone;
 double shaftOverlap = 0.15;
 double drillSpeed = 1.2;
-double retreatSpeed = 3.0;
+double _bm = 3.0;
 double cruiseSpeed = 40.0;
 double dockSpeed = 0.8;
 double cargoFullAt = 0.92;
@@ -166,18 +166,18 @@ bool drillOnRetreat = false;
 double probeDepth = 12.0;
 int probeStride = 2;
 double _o = 0.8;
-bool _ax = true;
+bool _bc = true;
 double oreScanRange = 500.0;
 double minBattery = 0.30;
 double minHydrogen = 0.25;
 double minUranium = 2.0;
-double _aq = 0.95;
+double _au = 0.95;
 double _ad = 0.90;
-double _ah = 0.80;
-double _am = 25.0;
-double stateTimeout = 240.0;
+double _ai = 0.80;
+double _aq = 25.0;
+double _bl = 240.0;
 bool stopOnDamage = false;
-double droneTimeout = 30.0;
+double _bn = 30.0;
 double laneSpacing = 12.0;
 int dockSlots = 1;
 string lcdTag = "[VEIN]";
@@ -185,8 +185,8 @@ bool verboseEcho = true;
 readonly MyIni ini = new MyIni();
 const string S_ID = "vein.identity";
 const string _r = "vein.mining";
-const string _at = "vein.scouting";
-const string _af = "vein.safety";
+const string _ay = "vein.scouting";
+const string _ag = "vein.safety";
 const string S_FLEET = "vein.fleet";
 const string S_DISP = "vein.display";
 void LoadConfig()
@@ -213,31 +213,31 @@ holeOrder = ParseHoleOrder(ini.Get(_r, "holeOrder").ToString("Prospect"));
 ejectMode = ParseEjectMode(ini.Get(_r, "eject").ToString("Stone"));
 shaftOverlap  = Clamp(ini.Get(_r, "shaftOverlap").ToDouble(0.15), 0.0, 0.75);
 drillSpeed    = Clamp(ini.Get(_r, "drillSpeed").ToDouble(1.2), 0.05, 10.0);
-retreatSpeed  = Clamp(ini.Get(_r, "retreatSpeed").ToDouble(3.0), 0.2, 20.0);
+_bm  = Clamp(ini.Get(_r, "retreatSpeed").ToDouble(3.0), 0.2, 20.0);
 cruiseSpeed   = Clamp(ini.Get(_r, "cruiseSpeed").ToDouble(40.0), 1.0, 300.0);
 dockSpeed     = Clamp(ini.Get(_r, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
 cargoFullAt   = Clamp(ini.Get(_r, "cargoFullAt").ToDouble(0.92), 0.1, 0.99);
 drillOnRetreat = ini.Get(_r, "drillOnRetreat").ToBoolean(false);
-probeDepth    = Clamp(ini.Get(_at, "probeDepth").ToDouble(12.0), 2.0, 200.0);
-probeStride   = (int)Clamp(ini.Get(_at, "probeStride").ToInt32(2), 1, 8);
-_o = Clamp(ini.Get(_at, "barrenThreshold").ToDouble(0.8), 0.0, 100.0);
-_ax = ini.Get(_at, "useOreDetectorMod").ToBoolean(true);
-oreScanRange  = Clamp(ini.Get(_at, "oreScanRange").ToDouble(500.0), 50.0, 20000.0);
-minBattery    = Clamp(ini.Get(_af, "minBattery").ToDouble(0.30), 0.05, 0.95);
-minHydrogen   = Clamp(ini.Get(_af, "minHydrogen").ToDouble(0.25), 0.0, 0.95);
-minUranium    = Math.Max(0.0, ini.Get(_af, "minUranium").ToDouble(2.0));
-_aq = Clamp(ini.Get(_af, "resumeBattery").ToDouble(0.95), 0.1, 1.0);
-_ad = Clamp(ini.Get(_af, "resumeHydrogen").ToDouble(0.90), 0.0, 1.0);
-_ah = Clamp(ini.Get(_af, "liftSafetyFactor").ToDouble(0.80), 0.2, 1.0);
-_am = Clamp(ini.Get(_af, "transitAltitude").ToDouble(25.0), 2.0, 500.0);
-stateTimeout  = Math.Max(0.0, ini.Get(_af, "stateTimeout").ToDouble(240.0));
-stopOnDamage  = ini.Get(_af, "stopOnDamage").ToBoolean(false);
-droneTimeout  = Clamp(ini.Get(S_FLEET, "droneTimeout").ToDouble(30.0), 5.0, 600.0);
+probeDepth    = Clamp(ini.Get(_ay, "probeDepth").ToDouble(12.0), 2.0, 200.0);
+probeStride   = (int)Clamp(ini.Get(_ay, "probeStride").ToInt32(2), 1, 8);
+_o = Clamp(ini.Get(_ay, "barrenThreshold").ToDouble(0.8), 0.0, 100.0);
+_bc = ini.Get(_ay, "useOreDetectorMod").ToBoolean(true);
+oreScanRange  = Clamp(ini.Get(_ay, "oreScanRange").ToDouble(500.0), 50.0, 20000.0);
+minBattery    = Clamp(ini.Get(_ag, "minBattery").ToDouble(0.30), 0.05, 0.95);
+minHydrogen   = Clamp(ini.Get(_ag, "minHydrogen").ToDouble(0.25), 0.0, 0.95);
+minUranium    = Math.Max(0.0, ini.Get(_ag, "minUranium").ToDouble(2.0));
+_au = Clamp(ini.Get(_ag, "resumeBattery").ToDouble(0.95), 0.1, 1.0);
+_ad = Clamp(ini.Get(_ag, "resumeHydrogen").ToDouble(0.90), 0.0, 1.0);
+_ai = Clamp(ini.Get(_ag, "liftSafetyFactor").ToDouble(0.80), 0.2, 1.0);
+_aq = Clamp(ini.Get(_ag, "transitAltitude").ToDouble(25.0), 2.0, 500.0);
+_bl  = Math.Max(0.0, ini.Get(_ag, "stateTimeout").ToDouble(240.0));
+stopOnDamage  = ini.Get(_ag, "stopOnDamage").ToBoolean(false);
+_bn  = Clamp(ini.Get(S_FLEET, "droneTimeout").ToDouble(30.0), 5.0, 600.0);
 laneSpacing   = Clamp(ini.Get(S_FLEET, "laneSpacing").ToDouble(12.0), 3.0, 100.0);
 dockSlots     = (int)Clamp(ini.Get(S_FLEET, "dockSlots").ToInt32(1), 1, 32);
 lcdTag        = ini.Get(S_DISP, "lcdTag").ToString("[VEIN]");
 verboseEcho   = ini.Get(S_DISP, "verboseEcho").ToBoolean(true);
-if (_aq <= minBattery) _aq = Math.Min(1.0, minBattery + 0.15);
+if (_au <= minBattery) _au = Math.Min(1.0, minBattery + 0.15);
 if (_ad <= minHydrogen) _ad = Math.Min(1.0, minHydrogen + 0.15);
 WriteConfig();
 }
@@ -261,35 +261,35 @@ ini.Set(_r, "shaftOverlap", shaftOverlap);
 ini.SetComment(_r, "shaftOverlap", "0.15 = shafts overlap 15%. Higher clears more rock, digs more holes.");
 ini.Set(_r, "drillSpeed", drillSpeed);
 ini.SetComment(_r, "drillSpeed", "m/s downward while cutting. Above ~2 m/s drills stop keeping up\nand you jam. Lower it on a light ship.");
-ini.Set(_r, "retreatSpeed", retreatSpeed);
+ini.Set(_r, "retreatSpeed", _bm);
 ini.Set(_r, "cruiseSpeed", cruiseSpeed);
 ini.SetComment(_r, "cruiseSpeed", "Ceiling only. Real speed is capped by whatever the ship can\nactually stop from, given its mass and the local gravity.");
 ini.Set(_r, "dockSpeed", dockSpeed);
 ini.SetComment(_r, "dockSpeed", "m/s on the final mating run. PAM uses 0.5 and docking is the\nmanoeuvre most likely to go wrong; slower is genuinely better here.");
 ini.Set(_r, "cargoFullAt", cargoFullAt);
 ini.Set(_r, "drillOnRetreat", drillOnRetreat);
-ini.Set(_at, "probeDepth", probeDepth);
-ini.SetComment(_at, "probeDepth", "Prospect mode: metres per test shaft before judging a cell.");
-ini.Set(_at, "probeStride", probeStride);
-ini.SetComment(_at, "probeStride", "Probe every Nth cell to build the first map. 2 is a good default;\n3-4 on a big site you want surveyed fast.");
-ini.Set(_at, "barrenThreshold", _o);
-ini.SetComment(_at, "barrenThreshold", "kg of ore per metre below which a cell is written off.");
-ini.Set(_at, "useOreDetectorMod", _ax);
-ini.SetComment(_at, "useOreDetectorMod", "Auto-detect Racher's 'Ore Detector Raycast' mod and read real ore\ncoordinates from it. Harmless if the mod is absent.");
-ini.Set(_at, "oreScanRange", oreScanRange);
-ini.Set(_af, "minBattery", minBattery);
-ini.Set(_af, "minHydrogen", minHydrogen);
-ini.Set(_af, "minUranium", minUranium);
-ini.SetComment(_af, "minUranium", "Kilograms across all reactors. Ignored if the ship has none.\n0 disables the check.");
-ini.Set(_af, "resumeBattery", _aq);
-ini.Set(_af, "resumeHydrogen", _ad);
-ini.Set(_af, "liftSafetyFactor", _ah);
-ini.SetComment(_af, "liftSafetyFactor", "Fraction of measured lift we will spend. 0.8 leaves 20% in hand\nfor a heavy load and a bad angle.");
-ini.Set(_af, "transitAltitude", _am);
-ini.Set(_af, "stateTimeout", stateTimeout);
-ini.SetComment(_af, "stateTimeout", "Seconds before the watchdog calls a state hung and recovers.\n0 disables it, which is rarely what you want.");
-ini.Set(_af, "stopOnDamage", stopOnDamage);
-ini.Set(S_FLEET, "droneTimeout", droneTimeout);
+ini.Set(_ay, "probeDepth", probeDepth);
+ini.SetComment(_ay, "probeDepth", "Prospect mode: metres per test shaft before judging a cell.");
+ini.Set(_ay, "probeStride", probeStride);
+ini.SetComment(_ay, "probeStride", "Probe every Nth cell to build the first map. 2 is a good default;\n3-4 on a big site you want surveyed fast.");
+ini.Set(_ay, "barrenThreshold", _o);
+ini.SetComment(_ay, "barrenThreshold", "kg of ore per metre below which a cell is written off.");
+ini.Set(_ay, "useOreDetectorMod", _bc);
+ini.SetComment(_ay, "useOreDetectorMod", "Auto-detect Racher's 'Ore Detector Raycast' mod and read real ore\ncoordinates from it. Harmless if the mod is absent.");
+ini.Set(_ay, "oreScanRange", oreScanRange);
+ini.Set(_ag, "minBattery", minBattery);
+ini.Set(_ag, "minHydrogen", minHydrogen);
+ini.Set(_ag, "minUranium", minUranium);
+ini.SetComment(_ag, "minUranium", "Kilograms across all reactors. Ignored if the ship has none.\n0 disables the check.");
+ini.Set(_ag, "resumeBattery", _au);
+ini.Set(_ag, "resumeHydrogen", _ad);
+ini.Set(_ag, "liftSafetyFactor", _ai);
+ini.SetComment(_ag, "liftSafetyFactor", "Fraction of measured lift we will spend. 0.8 leaves 20% in hand\nfor a heavy load and a bad angle.");
+ini.Set(_ag, "transitAltitude", _aq);
+ini.Set(_ag, "stateTimeout", _bl);
+ini.SetComment(_ag, "stateTimeout", "Seconds before the watchdog calls a state hung and recovers.\n0 disables it, which is rarely what you want.");
+ini.Set(_ag, "stopOnDamage", stopOnDamage);
+ini.Set(S_FLEET, "droneTimeout", _bn);
 ini.SetComment(S_FLEET, "droneTimeout", "Seconds of silence before a drone is presumed lost and its shaft\nis handed to somebody else.");
 ini.Set(S_FLEET, "laneSpacing", laneSpacing);
 ini.SetComment(S_FLEET, "laneSpacing", "Metres between drone altitude lanes over the site. Must exceed\nthe largest drone's height by a comfortable margin.");
@@ -342,7 +342,7 @@ configError = "Custom Data: '" + got.Trim() + "' is not a valid " + key + ", usi
 }
 string configError = "";
 string _f = "Booting";
-string _ay = "";
+string _be = "";
 readonly List<string> log = new List<string>();
 const int LOG_MAX = 12;
 long tick;
@@ -366,12 +366,12 @@ readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
 readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
 long lastScanTick = long.MinValue;
 const int RESCAN_INTERVAL = 600;
-double _ao = 1.0;
-double shipRadius = 3.0;
+double _as = 1.0;
+double _bd = 3.0;
 double drillRadius = 1.4;
 Vector3D drillOffset = Vector3D.Zero;
 bool isLargeGrid;
-double derivedSpacing = 2.4;
+double _bj = 2.4;
 Vector3D selectionOrigin;
 readonly List<string> thrusterTypes = new List<string>();
 readonly float[,] thrustByAxis = new float[3, 2];
@@ -382,16 +382,16 @@ Vector3D shipVel;
 Vector3D gravity;
 double speed;
 bool flightActive;
-double _ak;
-double _az;
+double _an;
+double _ao;
 readonly List<Waypoint> path = new List<Waypoint>();
-bool _ar;
+bool _av;
 Vector3D lastRecordPos;
 int _n;
 Waypoint homeDock;
 Vector3D homeDockForward;
 Vector3D homeDockUp;
-bool _ai;
+bool _aj;
 double _b = -1;
 readonly Job job = new Job();
 YieldCell[] cells = new YieldCell[0];
@@ -404,21 +404,25 @@ double shaftStartOre;
 double _e = -1;
 double shaftStartVolume;
 bool _s;
-double lastOreSample;
+double _bs;
 double _t;
 int noOreTicks;
-double _an;
+double _ar;
 int stuckTicks;
-int _aj;
-int dockRetries;
-double _ae;
+int _al;
+int _ak;
+bool _am;
+int _aw;
+int _ae;
+double lastDockDist = double.MaxValue;
+double _af;
 double cargoVolume;
 double _q;
 double uraniumKg;
 double _ab;
 double _i;
 double oreAboard;
-double hydroPerMetre;
+double _bt;
 bool _y;
 double hydroSampleFill;
 Vector3D hydroSamplePos;
@@ -444,7 +448,7 @@ bool oreModProbed;
 readonly List<OreSighting> sightings = new List<OreSighting>();
 const int SIGHTINGS_MAX = 64;
 int scanAzimuth;
-int _ap;
+int _at;
 readonly List<MyInventoryItem> itemScratch = new List<MyInventoryItem>();
 readonly List<IMyTerminalBlock> blockScratch = new List<IMyTerminalBlock>();
 readonly StringBuilder sb = new StringBuilder();
@@ -461,7 +465,7 @@ Log("VEIN " + VEIN_VERSION + " ready (" + role + ")");
 }
 catch (Exception e)
 {
-_ay = "Boot failed: " + e.Message;
+_be = "Boot failed: " + e.Message;
 state = MinerState.Fault;
 }
 }
@@ -518,11 +522,11 @@ stuckTicks = 0;
 }
 void Watchdog()
 {
-if (stateTimeout <= 0) return;
+if (_bl <= 0) return;
 if (state == MinerState.Idle || state == MinerState.Fault) return;
 if (state == MinerState.Servicing) return;
-if (stateTicks * dt < stateTimeout) return;
-Log("Watchdog: " + state + " ran over " + Fmt(stateTimeout, 0) + "s");
+if (stateTicks * dt < _bl) return;
+Log("Watchdog: " + state + " ran over " + Fmt(_bl, 0) + "s");
 switch (state)
 {
 case MinerState.Descending:
@@ -537,9 +541,9 @@ case MinerState.Selecting:
 _d(MinerState.Inbound);
 break;
 case MinerState.Docking:
-dockRetries++;
-if (dockRetries >= 3) EnterFault("Could not dock after 3 attempts");
-else { Log("Docking retry " + dockRetries); _d(MinerState.Inbound); }
+_ak++;
+if (_ak >= 3) EnterFault("Could not dock after 3 attempts");
+else { Log("Docking retry " + _ak); _d(MinerState.Inbound); }
 break;
 default:
 EnterFault("State " + state + " timed out");
@@ -549,7 +553,7 @@ break;
 void EnterFault(string why)
 {
 if (state == MinerState.Fault) return;
-_ay = why;
+_be = why;
 Log("FAULT: " + why);
 state = MinerState.Fault;
 stateTicks = 0;
@@ -560,9 +564,9 @@ SafeStop();
 }
 void ClearFault()
 {
-_ay = "";
-_aj = 0;
-dockRetries = 0;
+_be = "";
+_al = 0;
+_ak = 0;
 _d(MinerState.Idle);
 Log("Fault cleared");
 }
@@ -664,12 +668,12 @@ isLargeGrid = Me.CubeGrid.GridSizeEnum == MyCubeSize.Large;
 double gridSize = isLargeGrid ? 2.5 : 0.5;
 Vector3I min = Me.CubeGrid.Min, max = Me.CubeGrid.Max;
 Vector3D extent = new Vector3D(max.X - min.X + 1, max.Y - min.Y + 1, max.Z - min.Z + 1) * gridSize;
-shipRadius = Math.Max(1.0, extent.Length() * 0.5);
+_bd = Math.Max(1.0, extent.Length() * 0.5);
 if (controller == null || drills.Count == 0)
 {
 drillRadius = isLargeGrid ? 1.9 : 0.65;
 drillOffset = Vector3D.Zero;
-derivedSpacing = Math.Max(0.5, drillRadius * 2.0 * (1.0 - shaftOverlap));
+_bj = Math.Max(0.5, drillRadius * 2.0 * (1.0 - shaftOverlap));
 return;
 }
 double singleCut = isLargeGrid ? 1.9 : 0.65;
@@ -686,7 +690,7 @@ offsetSum += local;
 }
 drillRadius = maxLateral + singleCut;
 drillOffset = offsetSum / drills.Count;
-derivedSpacing = Math.Max(0.5, drillRadius * 2.0 * (1.0 - shaftOverlap));
+_bj = Math.Max(0.5, drillRadius * 2.0 * (1.0 - shaftOverlap));
 }
 Health CheckReadiness()
 {
@@ -696,7 +700,7 @@ if (thrusters.Count == 0) return Health.Bad("No thrusters");
 if (drills.Count == 0) return Health.Bad("No drills");
 if (dockConnector == null) return Health.Bad("No connector");
 if (!job.IsSet) return Health.Bad("No job set — use: job set <w> <h> <depth>");
-if (path.Count == 0 && !_ai) return Health.Bad("No path recorded — use: record start/stop");
+if (path.Count == 0 && !_aj) return Health.Bad("No path recorded — use: record start/stop");
 int liveThrust = 0, offThrust = 0;
 for (int i = 0; i < thrusters.Count; i++)
 {
@@ -708,8 +712,8 @@ if (liveThrust == 0) return Health.Bad("All thrusters damaged");
 int liveGyros = 0;
 for (int i = 0; i < gyros.Count; i++) if (gyros[i].IsFunctional) liveGyros++;
 if (liveGyros == 0) return Health.Bad("All gyroscopes damaged");
-if (_b > 0 && _ao > _b)
-return Health.Bad("Too heavy for the route: " + Fmt(_ao / 1000.0, 1) + "t of "
+if (_b > 0 && _as > _b)
+return Health.Bad("Too heavy for the route: " + Fmt(_as / 1000.0, 1) + "t of "
 + Fmt(_b / 1000.0, 1) + "t");
 return Health.Good();
 }
@@ -753,9 +757,9 @@ thrusterTypes.Add(type);
 }
 }
 thrusterTypes.Sort();
-RefreshThrustCapacity();
+_bp();
 }
-void RefreshThrustCapacity()
+void _bp()
 {
 for (int a = 0; a < 3; a++)
 for (int s = 0; s < 2; s++)
@@ -800,7 +804,7 @@ return limit == double.MaxValue ? 0 : limit;
 }
 double StoppingAccel(Vector3D dir)
 {
-double raw = ThrustAlong(-dir) / Math.Max(1.0, _ao);
+double raw = ThrustAlong(-dir) / Math.Max(1.0, _as);
 return Math.Max(0.15, raw - gravity.Length());
 }
 void FlyTo(Vector3D target, double maxSpeed)
@@ -808,12 +812,12 @@ void FlyTo(Vector3D target, double maxSpeed)
 flightActive = true;
 if (controller == null) return;
 Vector3D toTarget = target - controller.GetPosition();
-_ak = toTarget.Length();
-Vector3D dir = _ak > 1e-4 ? toTarget / _ak : Vector3D.Zero;
+_an = toTarget.Length();
+Vector3D dir = _an > 1e-4 ? toTarget / _an : Vector3D.Zero;
 double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, _ak)) * BRAKE_DERATE;
+double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, _an)) * BRAKE_DERATE;
 double want = Math.Min(maxSpeed, arrivalSpeed);
-if (_az > 20.0) want *= Math.Max(0.15, 1.0 - (_az - 20.0) / 70.0);
+if (_ao > 20.0) want *= Math.Max(0.15, 1.0 - (_ao - 20.0) / 70.0);
 want = Math.Min(want, 95.0);
 SetVelocity(dir * want);
 }
@@ -824,10 +828,10 @@ if (controller.DampenersOverride) controller.DampenersOverride = false;
 Vector3D velError = desiredVelWorld - shipVel;
 const double TAU = 0.45;
 Vector3D desiredAccel = velError / TAU;
-double accelCap = ThrustAlong(desiredAccel) / Math.Max(1.0, _ao);
+double accelCap = ThrustAlong(desiredAccel) / Math.Max(1.0, _as);
 if (accelCap > 0 && desiredAccel.Length() > accelCap)
 desiredAccel = Vector3D.Normalize(desiredAccel) * accelCap;
-Vector3D force = (desiredAccel - gravity) * _ao;
+Vector3D force = (desiredAccel - gravity) * _as;
 ApplyForce(force);
 }
 void ApplyForce(Vector3D worldForce)
@@ -859,7 +863,7 @@ if (controller == null || gyros.Count == 0) return;
 if (desiredForward.LengthSquared() < 1e-9)
 {
 ReleaseGyros();
-_az = 0;
+_ao = 0;
 return;
 }
 desiredForward = Vector3D.Normalize(desiredForward);
@@ -876,8 +880,8 @@ else desiredUp = Vector3D.Normalize(desiredUp);
 MatrixD m = controller.WorldMatrix;
 Vector3D errAxis = Vector3D.Cross(m.Forward, desiredForward)
 + Vector3D.Cross(m.Up, desiredUp);
-_az = ToDegrees(Math.Acos(Clamp(Vector3D.Dot(m.Forward, desiredForward), -1.0, 1.0)));
-if (errAxis.LengthSquared() < 1e-6 && _az > 90.0)
+_ao = ToDegrees(Math.Acos(Clamp(Vector3D.Dot(m.Forward, desiredForward), -1.0, 1.0)));
+if (errAxis.LengthSquared() < 1e-6 && _ao > 90.0)
 {
 Vector3D seed = Math.Abs(m.Forward.Z) < 0.9 ? Vector3D.Forward : Vector3D.Right;
 errAxis = Vector3D.Normalize(Vector3D.Cross(m.Forward, seed));
@@ -924,10 +928,10 @@ if (bucket == null) continue;
 for (int i = 0; i < bucket.Count; i++) bucket[i].ThrustOverridePercentage = 0f;
 }
 ReleaseGyros();
-SetDrills(false);
+_bo(false);
 if (controller != null) controller.DampenersOverride = true;
 }
-void SetDrills(bool on)
+void _bo(bool on)
 {
 for (int i = 0; i < drills.Count; i++)
 if (drills[i].Enabled != on) drills[i].Enabled = on;
@@ -945,8 +949,8 @@ MyShipVelocities v = controller.GetShipVelocities();
 shipVel = v.LinearVelocity;
 speed = shipVel.Length();
 gravity = controller.GetNaturalGravity();
-_ao = Math.Max(1.0, controller.CalculateShipMass().PhysicalMass);
-RefreshThrustCapacity();
+_as = Math.Max(1.0, controller.CalculateShipMass().PhysicalMass);
+_bp();
 SampleInventories();
 if (tick % 6 == 0) SampleOre();
 }
@@ -970,7 +974,7 @@ for (int i = 0; i < cargo.Count; i++)
 AccumulateVolume(cargo[i].GetInventory(0), ref vol, ref maxVol);
 for (int i = 0; i < drills.Count; i++)
 AccumulateVolume(drills[i].GetInventory(0), ref vol, ref maxVol);
-_ae = maxVol > 0 ? vol / maxVol : 0;
+_af = maxVol > 0 ? vol / maxVol : 0;
 cargoVolume = vol;
 double stored = 0, capacity = 0;
 for (int i = 0; i < batteries.Count; i++)
@@ -1035,7 +1039,7 @@ return Math.Max(0.0, oreAboard - shaftStartOre);
 }
 bool CargoFull
 {
-get { return _ae >= cargoFullAt || _ab >= 0.98; }
+get { return _af >= cargoFullAt || _ab >= 0.98; }
 }
 bool EjectWaste()
 {
@@ -1102,7 +1106,7 @@ IMyShipConnector far = dockConnector.OtherConnector;
 if (far != null) blockScratch.Add(far);
 if (blockScratch.Count == 0)
 {
-return _ae < 0.02;
+return _af < 0.02;
 }
 bool moved = false;
 for (int d = 0; d < blockScratch.Count; d++)
@@ -1117,7 +1121,7 @@ if (DrainAll(drills[i].GetInventory(0), dst)) moved = true;
 if (BudgetTight(0.75)) return false;
 }
 if (moved) SampleInventories();
-return _ae < 0.02;
+return _af < 0.02;
 }
 bool DrainAll(IMyInventory src, IMyInventory dst)
 {
@@ -1130,7 +1134,7 @@ for (int i = itemScratch.Count - 1; i >= 0; i--)
 if (src.TransferItemTo(dst, i, null, true, null)) moved = true;
 return moved;
 }
-void _as(bool charging)
+void _ax(bool charging)
 {
 for (int i = 0; i < batteries.Count; i++)
 {
@@ -1165,15 +1169,15 @@ hydroSamplePos = shipPos;
 hydroSampleFill = _i;
 if (used <= 0) return;
 double rate = used / travelled;
-hydroPerMetre = _y ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
+_bt = _y ? _bt * 0.7 + rate * 0.3 : rate;
 _y = true;
 }
 double FuelToGetHome()
 {
 if (!_y || hydrogenTanks.Count == 0) return 0;
-double distance = DistanceHomeAlongPath();
-if (distance <= 0) return 0;
-return distance * hydroPerMetre * 1.6;
+double _bi = DistanceHomeAlongPath();
+if (_bi <= 0) return 0;
+return _bi * _bt * 1.6;
 }
 bool FuelCriticalForReturn()
 {
@@ -1183,7 +1187,7 @@ return _i < need + 0.05;
 }
 bool ServiceComplete()
 {
-return _q >= _aq && _i >= _ad;
+return _q >= _au && _i >= _ad;
 }
 void SetJob(int width, int height, int depth)
 {
@@ -1199,8 +1203,8 @@ job.Width = Math.Max(1, width);
 job.Height = Math.Max(1, height);
 job.Depth = Math.Max(1, depth);
 MeasureShip();
-job.Spacing = derivedSpacing;
-_al();
+job.Spacing = _bj;
+_ap();
 _a = -1;
 _m = false;
 _s = false;
@@ -1227,10 +1231,10 @@ Log("Job frame axes are not perpendicular — clearing");
 job.IsSet = false;
 return false;
 }
-if (job.Spacing < 0.1 || job.Spacing > 100) job.Spacing = derivedSpacing;
+if (job.Spacing < 0.1 || job.Spacing > 100) job.Spacing = _bj;
 return true;
 }
-void _al()
+void _ap()
 {
 cells = new YieldCell[job.CellCount];
 for (int i = 0; i < cells.Length; i++) cells[i] = new YieldCell();
@@ -1239,14 +1243,14 @@ const int SCORE_BUDGET = 48;
 int scoreCursor;
 int CellCol(int idx) { return idx % job.Width; }
 int CellRow(int idx) { return idx / job.Width; }
-int SelectNextCell()
+int _bk()
 {
-return SelectNextCell(shipPos);
+return _bk(shipPos);
 }
-int SelectNextCell(Vector3D origin)
+int _bk(Vector3D origin)
 {
 selectionOrigin = origin;
-if (cells.Length != job.CellCount) _al();
+if (cells.Length != job.CellCount) _ap();
 switch (holeOrder)
 {
 case HoleOrder.Serpentine: _h = false; return NextSerpentine();
@@ -1313,7 +1317,7 @@ int window = Math.Min(SCORE_BUDGET, cells.Length);
 for (int k = 0; k < window; k++)
 Consider((scoreCursor + k) % cells.Length, ref best, ref bestScore);
 scoreCursor = (scoreCursor + window) % Math.Max(1, cells.Length);
-if (best < 0 && _au() > 0)
+if (best < 0 && _az() > 0)
 {
 for (int i = 0; i < cells.Length; i++)
 if (cells[i].Available) return i;
@@ -1380,12 +1384,12 @@ for (int c = c0; c <= c1; c++)
 {
 int n = job.IndexOf(c, r);
 if (n == idx) continue;
-YieldCell cell = cells[n];
-if (cell.MetresDrilled < 0.5f) continue;
+YieldCell _br = cells[n];
+if (_br.MetresDrilled < 0.5f) continue;
 int dc = c - col, dr = r - row;
 double d2 = dc * dc + dr * dr;
 double w = 1.0 / (1.0 + d2);
-weighted += w * cell.Yield;
+weighted += w * _br.Yield;
 weight += w;
 }
 }
@@ -1424,7 +1428,7 @@ int n = 0;
 for (int i = 0; i < cells.Length; i++) if (cells[i].MetresDrilled > 0.5f) n++;
 return n;
 }
-int _au()
+int _az()
 {
 int n = 0;
 for (int i = 0; i < cells.Length; i++) if (cells[i].Available) n++;
@@ -1438,36 +1442,36 @@ for (int i = 0; i < cells.Length; i++)
 if (cells[i].State == CellState.Exhausted || cells[i].State == CellState.Blocked) done++;
 return (double)done / cells.Length;
 }
-void _bb(int idx, ShaftResult result, double oreKg, double metres,
+void _bg(int idx, ShaftResult result, double oreKg, double metres,
 double depthReached, bool wasProbe)
 {
 if (idx < 0 || idx >= cells.Length) return;
-YieldCell cell = cells[idx];
-cell.OreKg += (float)oreKg;
-cell.MetresDrilled += (float)metres;
-cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
-cell.LeasedBy = 0;
-cell.LeaseExpiresTick = 0;
+YieldCell _br = cells[idx];
+_br.OreKg += (float)oreKg;
+_br.MetresDrilled += (float)metres;
+_br.DepthReached = Math.Max(_br.DepthReached, (float)depthReached);
+_br.LeasedBy = 0;
+_br.LeaseExpiresTick = 0;
 switch (result)
 {
 case ShaftResult.Completed:
 if (wasProbe)
-cell.State = cell.Yield >= _o ? CellState.Rich : CellState.Barren;
+_br.State = _br.Yield >= _o ? CellState.Rich : CellState.Barren;
 else
-cell.State = CellState.Exhausted;
+_br.State = CellState.Exhausted;
 break;
 case ShaftResult.OreExhausted:
-cell.State = cell.Yield >= _o ? CellState.Exhausted : CellState.Barren;
+_br.State = _br.Yield >= _o ? CellState.Exhausted : CellState.Barren;
 break;
 case ShaftResult.CargoFull:
-cell.State = cell.Yield >= _o ? CellState.Rich : CellState.Unknown;
+_br.State = _br.Yield >= _o ? CellState.Rich : CellState.Unknown;
 break;
 case ShaftResult.Stuck:
-cell.StuckCount++;
-cell.State = cell.StuckCount >= 3 ? CellState.Blocked : CellState.Unknown;
+_br.StuckCount++;
+_br.State = _br.StuckCount >= 3 ? CellState.Blocked : CellState.Unknown;
 break;
 case ShaftResult.Aborted:
-if (cell.State == CellState.Leased) cell.State = CellState.Unknown;
+if (_br.State == CellState.Leased) _br.State = CellState.Unknown;
 break;
 }
 if (role == Role.Miner && _c != 0)
@@ -1483,11 +1487,11 @@ cells[_a].State = CellState.Blocked;
 Log("Cell " + CellCol(_a) + "," + CellRow(_a) + " blocked");
 }
 }
-double RecordInterval { get { return Math.Max(5.0, shipRadius * 2.0); } }
+double RecordInterval { get { return Math.Max(5.0, _bd * 2.0); } }
 void StartRecording()
 {
 path.Clear();
-_ar = true;
+_av = true;
 _b = -1;
 CaptureHomeDock();
 AddWaypoint(true);
@@ -1495,11 +1499,11 @@ Log("Recording started");
 }
 void StopRecording()
 {
-if (!_ar) return;
+if (!_av) return;
 AddWaypoint(true);
-_ar = false;
-_aw();
-ComputeMaxFlyableMass();
+_av = false;
+_bb();
+_bq();
 Log("Recorded " + path.Count + " waypoints, "
 + (_b > 0 ? "lift limit " + Fmt(_b / 1000.0, 1) + "t" : "no gravity on route"));
 }
@@ -1520,16 +1524,16 @@ homeDock = new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift
 homeDockForward = m.Forward;
 homeDockUp = m.Up;
 }
-_ai = true;
+_aj = true;
 }
 void RecordTick()
 {
-if (!_ar) return;
+if (!_av) return;
 if (path.Count == 0) { AddWaypoint(true); return; }
 if (Vector3D.DistanceSquared(shipPos, lastRecordPos) < RecordInterval * RecordInterval) return;
 if (path.Count >= 400)
 {
-if (_ar) { Log("Path full at 400 points — recording stopped"); StopRecording(); }
+if (_av) { Log("Path full at 400 points — recording stopped"); StopRecording(); }
 return;
 }
 AddWaypoint(false);
@@ -1566,7 +1570,7 @@ eff[i] = nominal > 0 ? effective / nominal : -1f;
 }
 return eff;
 }
-void ComputeMaxFlyableMass()
+void _bq()
 {
 _b = -1;
 for (int i = 0; i < path.Count; i++)
@@ -1575,25 +1579,25 @@ Waypoint wp = path[i];
 double g = wp.Gravity.Length();
 if (g < 0.05) continue;
 if (wp.Lift <= 0) continue;
-double capable = (wp.Lift / g) * _ah;
+double capable = (wp.Lift / g) * _ai;
 if (_b < 0 || capable < _b) _b = capable;
 }
-if (_ai && homeDock != null && homeDock.Gravity.Length() >= 0.05 && homeDock.Lift > 0)
+if (_aj && homeDock != null && homeDock.Gravity.Length() >= 0.05 && homeDock.Lift > 0)
 {
-double capable = (homeDock.Lift / homeDock.Gravity.Length()) * _ah;
+double capable = (homeDock.Lift / homeDock.Gravity.Length()) * _ai;
 if (_b < 0 || capable < _b) _b = capable;
 }
 }
 double RemainingLiftMargin()
 {
 if (_b <= 0) return double.MaxValue;
-return _b - _ao;
+return _b - _as;
 }
 bool OverLiftLimit()
 {
-return _b > 0 && _ao >= _b;
+return _b > 0 && _as >= _b;
 }
-void _aw()
+void _bb()
 {
 pathCumulative = new double[path.Count];
 double total = 0;
@@ -1606,11 +1610,11 @@ pathCumulative[i] = total;
 double DistanceHomeAlongPath()
 {
 if (path.Count == 0) return 0;
-if (pathCumulative.Length != path.Count) _aw();
+if (pathCumulative.Length != path.Count) _bb();
 int idx = Math.Max(0, Math.Min(path.Count - 1, _n));
 return pathCumulative[idx] + Vector3D.Distance(shipPos, path[idx].Position);
 }
-double WaypointReached { get { return Math.Max(4.0, shipRadius * 1.5); } }
+double WaypointReached { get { return Math.Max(4.0, _bd * 1.5); } }
 int NearestWaypoint()
 {
 int best = -1;
@@ -1664,7 +1668,7 @@ _n = outbound ? 0 : path.Count - 1;
 void TickMiner()
 {
 stateTicks++;
-if (_ar) RecordTick();
+if (_av) RecordTick();
 CheckDamage();
 Watchdog();
 UpdateOreScan();
@@ -1709,10 +1713,10 @@ if (_w)
 {
 _f = "Undocking";
 SetThrusters(true);
-_as(false);
+_ax(false);
 SetTanksFilling(false);
 if (Docked) dockConnector.Disconnect();
-_an = 0;
+_ar = 0;
 }
 if (Docked) { dockConnector.Disconnect(); return; }
 Vector3D away = dockConnector != null
@@ -1720,7 +1724,7 @@ Vector3D away = dockConnector != null
 : (controller != null ? controller.WorldMatrix.Up : Vector3D.Up);
 Vector3D clear = homeDock != null ? homeDock.Position : shipPos;
 double travelled = Vector3D.Distance(shipPos, clear);
-double needed = shipRadius * 2.5;
+double needed = _bd * 2.5;
 if (travelled >= needed)
 {
 BeginPath(true);
@@ -1731,7 +1735,7 @@ FlyTo(clear + away * needed, dockSpeed * 2.0);
 }
 void StOutbound(bool _w)
 {
-if (_w) { _f = "Outbound"; BeginPath(true); SetDrills(false); }
+if (_w) { _f = "Outbound"; BeginPath(true); _bo(false); }
 if (!_v()) { _d(MinerState.Inbound); return; }
 if (FollowPath(true)) _d(MinerState.Selecting);
 }
@@ -1755,7 +1759,7 @@ return;
 if (_a >= 0) { _ac = false; BeginShaft(); return; }
 if (tick - lastRequestTick > 60)
 {
-if (tick - _u > (long)(droneTimeout / Math.Max(dt, 0.01)))
+if (tick - _u > (long)(_bn / Math.Max(dt, 0.01)))
 {
 Log("Dispatcher lost — continuing solo");
 _c = 0;
@@ -1764,16 +1768,16 @@ _ac = false;
 }
 return;
 }
-int cell = SelectNextCell();
-if (cell < 0)
+int _br = _bk();
+if (_br < 0)
 {
 _m = true;
 Log("Job complete");
 _d(MinerState.Inbound);
 return;
 }
-_a = cell;
-cells[cell].State = CellState.Leased;
+_a = _br;
+cells[_br].State = CellState.Leased;
 BeginShaft();
 }
 void BeginShaft()
@@ -1782,10 +1786,10 @@ SampleOre();
 _g = 0;
 _aa = 0;
 shaftStartOre = oreAboard;
-lastOreSample = 0;
+_bs = 0;
 _t = 0;
 noOreTicks = 0;
-_aj = 0;
+_al = 0;
 _e = -1;
 _x = _h ? Math.Min(probeDepth, job.Depth) : job.Depth;
 _d(MinerState.Approaching);
@@ -1793,35 +1797,35 @@ _d(MinerState.Approaching);
 void StApproaching(bool _w)
 {
 if (_a < 0) { _d(MinerState.Selecting); return; }
-if (_w) { _f = "To shaft " + _av(_a); SetDrills(false); }
+if (_w) { _f = "To shaft " + _ba(_a); _bo(false); }
 if (!_v()) { _z(ShaftResult.Aborted); return; }
 int col = CellCol(_a), row = CellRow(_a);
-double _ag = _am + myLane;
-Vector3D above = job.CellMouth(col, row, _ag);
+double _ah = _aq + myLane;
+Vector3D above = job.CellMouth(col, row, _ah);
 FlyTo(ControllerTargetFor(above), cruiseSpeed * 0.5);
 Orient(job.Down, job.Forward);
-bool overHole = _ak < Math.Max(1.5, shipRadius * 0.4);
-bool square = _az < 4.0;
+bool overHole = _an < Math.Max(1.5, _bd * 0.4);
+bool square = _ao < 4.0;
 if (!overHole || !square) return;
-if (!ShaftHasRock(_ag)) { SkipEmptyCell(); return; }
+if (!ShaftHasRock(_ah)) { SkipEmptyCell(); return; }
 _d(MinerState.Descending);
 }
-bool ShaftHasRock(double _ag)
+bool ShaftHasRock(double _ah)
 {
 if (cameras.Count == 0) return true;
-double reach = _ag + Math.Min(_x, 60.0);
+double reach = _ah + Math.Min(_x, 60.0);
 double hit;
 if (!TryScanAhead(reach, out hit)) return true;
 if (hit < 0) return false;
-return hit <= _ag + 8.0;
+return hit <= _ah + 8.0;
 }
 void SkipEmptyCell()
 {
-Log(_av(_a) + " is open space — skipping");
-_bb(_a, ShaftResult.Completed, 0, 0, 0, _h);
+Log(_ba(_a) + " is open space — skipping");
+_bg(_a, ShaftResult.Completed, 0, 0, 0, _h);
 if (_a >= 0 && _a < cells.Length)
 cells[_a].State = CellState.Barren;
-_ba();
+_bf();
 _a = -1;
 _d(MinerState.Selecting);
 }
@@ -1831,34 +1835,34 @@ if (_a < 0) { _d(MinerState.Selecting); return; }
 int col = CellCol(_a), row = CellRow(_a);
 if (_w)
 {
-_f = (_h ? "Probing " : "Drilling ") + _av(_a);
-_an = CurrentShaftDepth(col, row);
+_f = (_h ? "Probing " : "Drilling ") + _ba(_a);
+_ar = _bh(col, row);
 stuckTicks = 0;
-lastOreSample = ShaftOreSoFar();
+_bs = ShaftOreSoFar();
 _e = -1;
 shaftStartVolume = cargoVolume;
 }
-_g = CurrentShaftDepth(col, row);
+_g = _bh(col, row);
 if (_g > _aa) _aa = _g;
 if (_e < 0 && cargoVolume > shaftStartVolume + 0.001)
 _e = _g;
 bool inRock = _g > -2.0;
-SetDrills(inRock);
-double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
+_bo(inRock);
+double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(_bm, 6.0));
 if (!_v()) { _z(ShaftResult.Aborted); return; }
 if (CargoFull || OverLiftLimit()) { _z(ShaftResult.CargoFull); return; }
 if (_g >= EffectiveDepthLimit()) { _z(ShaftResult.Completed); return; }
 if (DepthExhausted()) { _z(ShaftResult.OreExhausted); return; }
 if (inRock && IsStuck())
 {
-_aj++;
-if (_aj > 3) { _z(ShaftResult.Stuck); return; }
-Log("Stuck at " + Fmt(_g, 1) + "m, backing off (" + _aj + "/3)");
+_al++;
+if (_al > 3) { _z(ShaftResult.Stuck); return; }
+Log("Stuck at " + Fmt(_g, 1) + "m, backing off (" + _al + "/3)");
 Vector3D relief = job.CellDepth(col, row, Math.Max(0, _g - 2.0));
-FlyTo(ControllerTargetFor(relief), retreatSpeed);
+FlyTo(ControllerTargetFor(relief), _bm);
 Orient(job.Down, job.Forward);
 stuckTicks = 0;
-_an = _g - 2.0;
+_ar = _g - 2.0;
 return;
 }
 double aimDepth = Math.Min(EffectiveDepthLimit(), Math.Max(_g, 0.0) + 5.0);
@@ -1871,20 +1875,20 @@ void StAscending(bool _w)
 if (_w)
 {
 _f = "Withdrawing";
-SetDrills(drillOnRetreat);
+_bo(drillOnRetreat);
 }
 if (_a < 0) { _d(MinerState.Selecting); return; }
 int col = CellCol(_a), row = CellRow(_a);
-double depth = CurrentShaftDepth(col, row);
-double _ag = _am + myLane;
-Vector3D clearOfHole = job.CellMouth(col, row, _ag);
+double depth = _bh(col, row);
+double _ah = _aq + myLane;
+Vector3D clearOfHole = job.CellMouth(col, row, _ah);
 Vector3D exitPoint = depth > 1.0
 ? job.CellDepth(col, row, Math.Max(0, depth - 6.0))
 : clearOfHole;
-FlyTo(ControllerTargetFor(exitPoint), retreatSpeed);
+FlyTo(ControllerTargetFor(exitPoint), _bm);
 Orient(job.Down, job.Forward);
 if (depth > 1.0) return;
-SetDrills(false);
+_bo(false);
 FinishShaft();
 }
 void FinishShaft()
@@ -1896,10 +1900,10 @@ double cut = _e >= 0
 ? Math.Max(0.0, _aa - _e)
 : 0.0;
 if (_e < 0 && result == ShaftResult.Completed)
-Log(_av(_a) + " never reached rock");
-_bb(_a, result, ore, cut, cut, _h);
-_ba();
-Log(_av(_a) + " " + result + ": " + Fmt(ore, 0) + "kg / "
+Log(_ba(_a) + " never reached rock");
+_bg(_a, result, ore, cut, cut, _h);
+_bf();
+Log(_ba(_a) + " " + result + ": " + Fmt(ore, 0) + "kg / "
 + Fmt(cut, 1) + "m cut");
 _a = -1;
 if (!_p) { _d(MinerState.Inbound); return; }
@@ -1934,7 +1938,7 @@ void StInbound(bool _w)
 if (_w)
 {
 _f = "Returning";
-SetDrills(false);
+_bo(false);
 BeginPath(false);
 if (HasDispatcher) RequestDock();
 }
@@ -1942,35 +1946,68 @@ if (FollowPath(false)) _d(MinerState.Docking);
 }
 void StDocking(bool _w)
 {
-if (_w) { _f = "Docking"; SetDrills(false); }
+if (_w)
+{
+_f = "Docking";
+_bo(false);
+_am = false;
+_aw = 0;
+_ae = 0;
+lastDockDist = double.MaxValue;
+}
 if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
-if (!_ai) { EnterFault("No dock recorded"); return; }
+if (!_aj) { EnterFault("No dock recorded"); return; }
 if (Docked)
 {
 SafeStop();
-dockRetries = 0;
+_ak = 0;
+_am = false;
 _d(MinerState.Unloading);
 return;
 }
 Vector3D mate = homeDock.Position;
 Vector3D axis = homeDockForward;
-double _ag = Math.Max(6.0, shipRadius * 2.0);
-Vector3D hold = mate + axis * _ag;
+double _ah = Math.Max(6.0, _bd * 2.0);
+Vector3D hold = mate + axis * _ah;
 Vector3D offAxis = shipPos - mate;
 double along = Vector3D.Dot(offAxis, axis);
 double lateral = (offAxis - axis * along).Length();
 Vector3D connectorOffset = dockConnector.GetPosition() - shipPos;
-if (lateral > 1.0 || along > _ag * 1.4)
-{
-FlyTo(hold - connectorOffset, dockSpeed * 3.0);
-}
-else
-{
-FlyTo(mate - connectorOffset, dockSpeed);
-if (dockConnector.Status == MyShipConnectorStatus.Connectable)
-dockConnector.Connect();
-}
 Orient(-axis, homeDockUp);
+if (lateral > 1.0 || along > _ah * 1.4)
+{
+_am = false;
+FlyTo(hold - connectorOffset, dockSpeed * 3.0);
+return;
+}
+if (_ao > 10.0 && !_am)
+{
+FlyTo(hold - connectorOffset, dockSpeed);
+_f = "Docking — squaring up";
+return;
+}
+double mateDist = Vector3D.Distance(shipPos + connectorOffset, mate);
+double nearDist = Math.Max(1.5, Math.Min(5.0, _bd * 0.3));
+if (mateDist <= nearDist) _am = true;
+FlyTo(mate - connectorOffset, _am ? dockSpeed : dockSpeed * 2.5);
+if (dockConnector.Status == MyShipConnectorStatus.Connectable)
+{
+_aw++;
+if (_aw > 5) dockConnector.Connect();
+_ae = 0;
+return;
+}
+_aw = 0;
+double rounded = Math.Round(mateDist, 1);
+if (rounded < lastDockDist) { lastDockDist = rounded; _ae = 0; }
+else _ae++;
+if (_ae > 20)
+{
+Log("Dock approach stalled at " + Fmt(mateDist, 1) + "m — backing off");
+_ak++;
+if (_ak >= 3) { EnterFault("Could not dock after 3 attempts"); return; }
+_d(MinerState.Inbound);
+}
 }
 void StUnloading(bool _w)
 {
@@ -1978,7 +2015,7 @@ if (_w)
 {
 _f = "Unloading";
 SafeStop();
-_as(true);
+_ax(true);
 SetTanksFilling(true);
 }
 if (!Docked) { _d(MinerState.Docking); return; }
@@ -1989,7 +2026,7 @@ void StServicing(bool _w)
 if (_w)
 {
 _f = "Charging";
-_as(true);
+_ax(true);
 SetTanksFilling(true);
 SetThrusters(false);
 }
@@ -2012,7 +2049,7 @@ _d(MinerState.Undocking);
 void StFault(bool _w)
 {
 if (_w) SafeStop();
-_f = "FAULT: " + _ay;
+_f = "FAULT: " + _be;
 }
 bool _v()
 {
@@ -2027,7 +2064,7 @@ double EffectiveDepthLimit()
 if (_e < 0) return job.Depth;
 return _e + _x;
 }
-double CurrentShaftDepth(int col, int row)
+double _bh(int col, int row)
 {
 Vector3D mouth = job.CellMouth(col, row, 0);
 return Vector3D.Dot(DrillFace() - mouth, job.Down);
@@ -2038,9 +2075,9 @@ return desiredFacePos - (DrillFace() - shipPos);
 }
 bool IsStuck()
 {
-if (_g > _an + 0.15)
+if (_g > _ar + 0.15)
 {
-_an = _g;
+_ar = _g;
 stuckTicks = 0;
 return false;
 }
@@ -2052,10 +2089,10 @@ bool DepthExhausted()
 if (depthMode == DepthMode.Fixed) return false;
 if (_e < 0) { _t = _g; return false; }
 if (_g < _e + 6.0) { _t = _g; return false; }
-double now = depthMode == DepthMode.AutoOre ? ShaftOreSoFar() : _ae * 1000.0;
-if (now > lastOreSample + 0.5)
+double now = depthMode == DepthMode.AutoOre ? ShaftOreSoFar() : _af * 1000.0;
+if (now > _bs + 0.5)
 {
-lastOreSample = now;
+_bs = now;
 _t = _g;
 noOreTicks = 0;
 return false;
@@ -2078,7 +2115,7 @@ if (_a >= 0) _z(ShaftResult.Aborted);
 else _d(MinerState.Inbound);
 }
 }
-string _av(int idx)
+string _ba(int idx)
 {
 if (idx < 0) return "-";
 return "[" + CellCol(idx) + "," + CellRow(idx) + "]";
@@ -2088,7 +2125,7 @@ void ProbeOreMod()
 {
 oreModProbed = true;
 _l = false;
-if (!_ax || oreDetectors.Count == 0) return;
+if (!_bc || oreDetectors.Count == 0) return;
 IMyOreDetector d = oreDetectors[0];
 try
 {
@@ -2132,32 +2169,32 @@ catch
 _l = false;
 }
 }
-bool NextScanTarget(Vector3D from, out Vector3D target, out double distance)
+bool NextScanTarget(Vector3D from, out Vector3D target, out double _bi)
 {
 target = Vector3D.Zero;
-distance = 0;
+_bi = 0;
 if (job.IsSet)
 {
 int cellIdx = scanAzimuth % Math.Max(1, job.CellCount);
 int col = cellIdx % job.Width;
 int row = cellIdx / job.Width;
-int depthStep = _ap % 4;
+int depthStep = _at % 4;
 double depth = job.Depth * (0.25 + 0.25 * depthStep);
 target = job.CellDepth(col, row, depth);
-_ap++;
-if (_ap % 4 == 0) scanAzimuth++;
-distance = Vector3D.Distance(from, target);
+_at++;
+if (_at % 4 == 0) scanAzimuth++;
+_bi = Vector3D.Distance(from, target);
 return true;
 }
 double az = (scanAzimuth % 24) * (Math.PI * 2.0 / 24.0);
-double el = ((_ap % 7) - 3) * (Math.PI / 8.0);
+double el = ((_at % 7) - 3) * (Math.PI / 8.0);
 Vector3D dir;
 Vector3D.CreateFromAzimuthAndElevation(az, el, out dir);
 if (controller != null) dir = Vector3D.TransformNormal(dir, controller.WorldMatrix);
 scanAzimuth++;
-if (scanAzimuth % 24 == 0) _ap++;
-distance = Math.Min(oreScanRange, 1000.0);
-target = from + dir * distance;
+if (scanAzimuth % 24 == 0) _at++;
+_bi = Math.Min(oreScanRange, 1000.0);
+target = from + dir * _bi;
 return true;
 }
 void AddSighting(string oreType, Vector3D pos)
@@ -2203,9 +2240,9 @@ int row = (int)Math.Round(y / job.Spacing + (job.Height - 1) * 0.5);
 if (col < 0 || col >= job.Width || row < 0 || row >= job.Height) return -1;
 return job.IndexOf(col, row);
 }
-bool TryScanAhead(double maxRange, out double distance)
+bool TryScanAhead(double maxRange, out double _bi)
 {
-distance = -1;
+_bi = -1;
 for (int i = 0; i < cameras.Count; i++)
 {
 IMyCameraBlock cam = cameras[i];
@@ -2216,7 +2253,7 @@ MyDetectedEntityInfo hit = cam.Raycast(maxRange);
 if (hit.IsEmpty() || !hit.HitPosition.HasValue) return true;
 if (hit.Type != MyDetectedEntityType.Asteroid && hit.Type != MyDetectedEntityType.Planet)
 return true;
-distance = Vector3D.Distance(cam.GetPosition(), hit.HitPosition.Value);
+_bi = Vector3D.Distance(cam.GetPosition(), hit.HitPosition.Value);
 return true;
 }
 return false;
@@ -2286,7 +2323,7 @@ if (role != Role.Miner || _c == 0) return;
 if (tick % 12 != 0) return;
 string body = "H|" + ShipLabel()
 + "|" + (int)state
-+ "|" + EncD(_ae)
++ "|" + EncD(_af)
 + "|" + EncD(_q)
 + "|" + EncV(shipPos)
 + "|" + _a;
@@ -2327,10 +2364,10 @@ void ReleaseLease(ShaftResult why)
 if (_a < 0) return;
 if (_c != 0)
 SendShaftReport(_a, why, ShaftOreSoFar(), _aa, _aa, _h);
-_ba();
+_bf();
 _a = -1;
 }
-void _ba()
+void _bf()
 {
 if (_a < 0 || _a >= cells.Length) return;
 if (cells[_a].State == CellState.Leased) cells[_a].State = CellState.Unknown;
@@ -2389,7 +2426,7 @@ job.Right = DecV(f[7]);
 job.Forward = DecV(f[8]);
 job.Down = DecV(f[9]);
 if (!ValidateJobBasis()) return;
-if (reshaped || cells.Length != job.CellCount) _al();
+if (reshaped || cells.Length != job.CellCount) _ap();
 }
 void OnHeartbeat(long src, string[] f)
 {
@@ -2426,14 +2463,14 @@ r.Lane = fleet.Count * laneSpacing;
 fleet[src] = r;
 }
 r.LastSeenTick = tick;
-int cell = SelectNextCell(r.Position.LengthSquared() > 1 ? r.Position : shipPos);
-if (cell < 0) { DenyLease(src, "done"); return; }
-cells[cell].State = CellState.Leased;
-cells[cell].LeasedBy = src;
-cells[cell].LeaseExpiresTick = tick + (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
-r.LeasedCell = cell;
+int _br = _bk(r.Position.LengthSquared() > 1 ? r.Position : shipPos);
+if (_br < 0) { DenyLease(src, "done"); return; }
+cells[_br].State = CellState.Leased;
+cells[_br].LeasedBy = src;
+cells[_br].LeaseExpiresTick = tick + (long)(_bn * 2 / Math.Max(dt, 0.01));
+r.LeasedCell = _br;
 double limit = _h ? Math.Min(probeDepth, job.Depth) : job.Depth;
-GrantLease(src, cell, limit, _h, r.Lane);
+GrantLease(src, _br, limit, _h, r.Lane);
 }
 void OnLeaseGrant(long src, string[] f)
 {
@@ -2469,7 +2506,7 @@ int idx = _k(f[1], -1);
 if (idx < 0 || idx >= cells.Length) return;
 if (cells[idx].LeasedBy != 0 && cells[idx].LeasedBy != src) return;
 ShaftResult result = (ShaftResult)_k(f[2], 0);
-_bb(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
+_bg(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
 DroneRecord r;
 if (fleet.TryGetValue(src, out r)) r.LeasedCell = -1;
 }
@@ -2523,7 +2560,7 @@ void TickDispatcher()
 {
 stateTicks++;
 _f = "Dispatching";
-if (_ar) RecordTick();
+if (_av) RecordTick();
 UpdateOreScan();
 if (tick % 30 == 0) SendBeacon();
 ExpireLeases();
@@ -2537,7 +2574,7 @@ for (int i = 0; i < cells.Length; i++)
 YieldCell c = cells[i];
 if (c.State != CellState.Leased) continue;
 if (c.LeaseExpiresTick == 0 || tick < c.LeaseExpiresTick) continue;
-Log("Lease on " + _av(i) + " expired — reissuing");
+Log("Lease on " + _ba(i) + " expired — reissuing");
 c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
 c.LeasedBy = 0;
 c.LeaseExpiresTick = 0;
@@ -2546,7 +2583,7 @@ c.LeaseExpiresTick = 0;
 void ExpireDrones()
 {
 if (fleet.Count == 0) return;
-long limit = (long)(droneTimeout / Math.Max(dt, 0.01));
+long limit = (long)(_bn / Math.Max(dt, 0.01));
 var lost = new List<long>();
 foreach (var kv in fleet)
 if (tick - kv.Value.LastSeenTick > limit) lost.Add(kv.Key);
@@ -2720,7 +2757,7 @@ if (configError.Length > 0)
 sb.Append("! ").Append(configError).Append('\n');
 if (state == MinerState.Fault)
 {
-sb.Append("\n*** FAULT ***\n").Append(_ay).Append("\n\n");
+sb.Append("\n*** FAULT ***\n").Append(_be).Append("\n\n");
 sb.Append("Run 'clear' once the cause is fixed.\n");
 }
 if (role == Role.Miner) RenderMiner();
@@ -2739,10 +2776,10 @@ if (verboseEcho) Echo(lastRender);
 void RenderMiner()
 {
 sb.Append(state.ToString()).Append(" — ").Append(_f).Append('\n');
-if (_ar)
+if (_av)
 sb.Append("RECORDING  ").Append(path.Count).Append(" points\n");
-sb.Append("Cargo  ").Append(Bar(_ae, 12)).Append(' ')
-.Append(Fmt(_ae * 100, 0)).Append("%  ").Append(FmtMass(oreAboard)).Append(" ore\n");
+sb.Append("Cargo  ").Append(Bar(_af, 12)).Append(' ')
+.Append(Fmt(_af * 100, 0)).Append("%  ").Append(FmtMass(oreAboard)).Append(" ore\n");
 sb.Append("Power  ").Append(Bar(_q, 12)).Append(' ')
 .Append(Fmt(_q * 100, 0)).Append("%\n");
 if (hydrogenTanks.Count > 0)
@@ -2750,7 +2787,7 @@ sb.Append("H2     ").Append(Bar(_i, 12)).Append(' ')
 .Append(Fmt(_i * 100, 0)).Append("%\n");
 if (_a >= 0)
 {
-sb.Append("Shaft  ").Append(_av(_a));
+sb.Append("Shaft  ").Append(_ba(_a));
 if (_h) sb.Append(" probe");
 sb.Append("  ").Append(Fmt(_g, 1)).Append('/')
 .Append(Fmt(_x, 0)).Append("m\n");
@@ -2760,12 +2797,12 @@ if (job.IsSet)
 sb.Append("Job    ").Append(job.Width).Append('x').Append(job.Height)
 .Append(" @").Append(job.Depth).Append("m  ")
 .Append(Fmt(JobProgress() * 100, 0)).Append("% done, ")
-.Append(_au()).Append(" left\n");
+.Append(_az()).Append(" left\n");
 }
 if (_b > 0)
 {
 double margin = RemainingLiftMargin();
-sb.Append("Lift   ").Append(FmtMass(_ao)).Append(" of ")
+sb.Append("Lift   ").Append(FmtMass(_as)).Append(" of ")
 .Append(FmtMass(_b));
 if (margin < 0) sb.Append("  OVER");
 sb.Append('\n');
@@ -2774,14 +2811,14 @@ if (reactors.Count > 0)
 sb.Append("Uranium ").Append(Fmt(uraniumKg, 1)).Append("kg\n");
 if (_y)
 {
-sb.Append("Fuel   burn ").Append(Fmt(hydroPerMetre * 100000, 2))
+sb.Append("Fuel   burn ").Append(Fmt(_bt * 100000, 2))
 .Append("%/km, return needs ").Append(Fmt(FuelToGetHome() * 100, 0)).Append("%\n");
 }
 sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 if (flightActive)
-sb.Append("Nav    ").Append(Fmt(_ak, 1)).Append("m  ")
+sb.Append("Nav    ").Append(Fmt(_an, 1)).Append("m  ")
 .Append(Fmt(speed, 1)).Append("m/s  err ")
-.Append(Fmt(_az, 0)).Append("deg\n");
+.Append(Fmt(_ao, 0)).Append("deg\n");
 sb.Append("Load   ").Append(Fmt(loadPeak * 100, 0)).Append("% of tick budget\n");
 }
 void RenderDispatcher()
@@ -2806,7 +2843,7 @@ sb.Append(Pad(r.Name, 12)).Append(' ')
 .Append(Pad(r.State.ToString(), 11)).Append(' ')
 .Append(Pad(Fmt(r.CargoFill * 100, 0) + "%", 5))
 .Append(Pad(Fmt(r.Battery * 100, 0) + "%", 5));
-if (r.LeasedCell >= 0) sb.Append(_av(r.LeasedCell));
+if (r.LeasedCell >= 0) sb.Append(_ba(r.LeasedCell));
 sb.Append('\n');
 }
 }
@@ -2958,12 +2995,12 @@ if (state == MinerState.Idle) _d(Docked ? MinerState.Undocking : MinerState.Outb
 }
 void CmdReset()
 {
-_al();
+_ap();
 sightings.Clear();
 _a = -1;
 _m = false;
 _s = false;
-_aj = 0;
+_al = 0;
 Log("Yield map cleared");
 }
 void CmdRecord(string[] a)
@@ -2980,8 +3017,8 @@ StopRecording();
 break;
 case "clear":
 path.Clear();
-_ar = false;
-_ai = false;
+_av = false;
+_aj = false;
 _b = -1;
 Log("Path cleared");
 break;
@@ -3018,7 +3055,7 @@ case "size":
 if (a.Length < 4) { Log("job size <width> <height>"); return; }
 job.Width = Math.Max(1, _k(a[2], job.Width));
 job.Height = Math.Max(1, _k(a[3], job.Height));
-_al();
+_ap();
 _s = false;
 Log("Job resized to " + job.Width + "x" + job.Height);
 if (role == Role.Dispatcher) SendBeacon();
@@ -3078,7 +3115,7 @@ b.Append("P|").Append(EncV(w.Position))
 .Append('|').Append(EncD(w.Lift))
 .Append('\n');
 }
-if (_ai && homeDock != null)
+if (_aj && homeDock != null)
 {
 b.Append("D|").Append(EncV(homeDock.Position))
 .Append('|').Append(EncV(homeDockForward))
@@ -3129,12 +3166,12 @@ if (!versionOk || f.Length < 6) break;
 homeDock = new Waypoint(DecV(f[1]), DecV(f[4]), new float[0], (float)DecD(f[5]));
 homeDockForward = DecV(f[2]);
 homeDockUp = DecV(f[3]);
-_ai = true;
+_aj = true;
 break;
 }
 }
-_aw();
-ComputeMaxFlyableMass();
+_bb();
+_bq();
 if (path.Count > 0 || job.IsSet)
 Log("Restored: " + path.Count + " waypoints, " + ProbedCellCount() + " surveyed cells");
 }
@@ -3167,7 +3204,7 @@ job.Right = DecV(f[6]);
 job.Forward = DecV(f[7]);
 job.Down = DecV(f[8]);
 if (!ValidateJobBasis()) return;
-_al();
+_ap();
 }
 void LoadCells(string[] f)
 {
@@ -3241,7 +3278,7 @@ string sub = role == Role.Dispatcher
 ? fleet.Count + " drone" + (fleet.Count == 1 ? "" : "s")
 : (HasDispatcher ? "fleet" : "solo");
 Text(frame, sub, pos + new Vector2(size.Y * 0.28f, size.Y * 0.55f), fs * 0.62f, C_DIM);
-string headline = fault ? _ay : _f;
+string headline = fault ? _be : _f;
 if (headline.Length > 34) headline = headline.Substring(0, 33) + "…";
 Text(frame, headline, pos + new Vector2(size.X * 0.30f, size.Y * 0.10f), fs * 0.80f,
 fault ? C_BAD : C_INK);
@@ -3267,9 +3304,9 @@ return;
 float pad = size.Y * 0.05f;
 float labelH = size.Y * 0.10f;
 Vector2 area = new Vector2(size.X - pad * 2, size.Y - pad * 2 - labelH);
-float cell = Math.Min(area.X / job.Width, area.Y / job.Height);
-float gap = cell > 8f ? cell * 0.08f : 0f;
-Vector2 gridSize = new Vector2(cell * job.Width, cell * job.Height);
+float _br = Math.Min(area.X / job.Width, area.Y / job.Height);
+float gap = _br > 8f ? _br * 0.08f : 0f;
+Vector2 gridSize = new Vector2(_br * job.Width, _br * job.Height);
 Vector2 gridPos = pos + new Vector2(pad, pad) + (area - gridSize) * 0.5f;
 float peak = 0.01f;
 for (int i = 0; i < cells.Length; i++)
@@ -3281,21 +3318,21 @@ for (int row = 0; row < job.Height; row += step)
 for (int col = 0; col < job.Width; col += step)
 {
 int idx = job.IndexOf(col, row);
-Vector2 p = gridPos + new Vector2(col * cell, row * cell);
+Vector2 p = gridPos + new Vector2(col * _br, row * _br);
 Fill(frame, p + new Vector2(gap * 0.5f, gap * 0.5f),
-new Vector2(cell * step - gap, cell * step - gap), CellColor(cells[idx], peak));
+new Vector2(_br * step - gap, _br * step - gap), CellColor(cells[idx], peak));
 }
 }
 if (role == Role.Dispatcher)
 {
 foreach (var kv in fleet)
-DrawDroneMarker(frame, gridPos, cell, kv.Value.Position, C_ACCENT);
+DrawDroneMarker(frame, gridPos, _br, kv.Value.Position, C_ACCENT);
 }
 else if (_a >= 0)
 {
 int col = CellCol(_a), row = CellRow(_a);
-Vector2 p = gridPos + new Vector2((col + 0.5f) * cell, (row + 0.5f) * cell);
-Sprite(frame, "CircleHollow", p, new Vector2(cell * 1.9f, cell * 1.9f), Color.White);
+Vector2 p = gridPos + new Vector2((col + 0.5f) * _br, (row + 0.5f) * _br);
+Sprite(frame, "CircleHollow", p, new Vector2(_br * 1.9f, _br * 1.9f), Color.White);
 }
 Text(frame, "yield map  ·  peak " + Fmt(peak, 1) + " kg/m",
 pos + new Vector2(size.X * 0.5f, size.Y - labelH), size.Y * 0.055f, C_DIM,
@@ -3317,15 +3354,15 @@ Color hot = t < 0.5f
 if (c.State == CellState.Exhausted) return Dim(hot, 0.45f);
 return hot;
 }
-void DrawDroneMarker(MySpriteDrawFrame frame, Vector2 gridPos, float cell, Vector3D world, Color col)
+void DrawDroneMarker(MySpriteDrawFrame frame, Vector2 gridPos, float _br, Vector3D world, Color col)
 {
 if (job.Spacing <= 0) return;
 Vector3D d = world - job.Origin;
 double x = Vector3D.Dot(d, job.Right) / job.Spacing + (job.Width - 1) * 0.5;
 double y = Vector3D.Dot(d, job.Forward) / job.Spacing + (job.Height - 1) * 0.5;
 if (x < -1 || x > job.Width || y < -1 || y > job.Height) return;
-Vector2 p = gridPos + new Vector2((float)(x + 0.5) * cell, (float)(y + 0.5) * cell);
-Sprite(frame, "Circle", p, new Vector2(cell * 0.7f, cell * 0.7f), col);
+Vector2 p = gridPos + new Vector2((float)(x + 0.5) * _br, (float)(y + 0.5) * _br);
+Sprite(frame, "Circle", p, new Vector2(_br * 0.7f, _br * 0.7f), col);
 }
 void DrawShipPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
 {
@@ -3335,7 +3372,7 @@ float fs = size.Y * 0.055f;
 float y = pos.Y + pad;
 float rowH = size.Y * 0.145f;
 Gauge(frame, new Vector2(pos.X + pad, y), size.X - pad * 2, rowH, "CARGO",
-_ae, FmtMass(oreAboard) + " ore", GaugeColor(_ae, true));
+_af, FmtMass(oreAboard) + " ore", GaugeColor(_af, true));
 y += rowH;
 Gauge(frame, new Vector2(pos.X + pad, y), size.X - pad * 2, rowH, "POWER",
 _q, Fmt(_q * 100, 0) + "%", GaugeColor(_q, false));
@@ -3349,7 +3386,7 @@ y += rowH;
 y += pad * 0.5f;
 if (_a >= 0)
 {
-string what = (_h ? "probe " : "shaft ") + _av(_a);
+string what = (_h ? "probe " : "shaft ") + _ba(_a);
 Text(frame, what, new Vector2(pos.X + pad, y), fs, C_DIM);
 Text(frame, Fmt(Math.Max(0, _g), 1) + " m",
 new Vector2(pos.X + size.X - pad, y), fs, C_INK, TextAlignment.RIGHT);
@@ -3357,9 +3394,9 @@ y += rowH * 0.75f;
 }
 if (_b > 0)
 {
-bool over = _ao >= _b;
+bool over = _as >= _b;
 Text(frame, "lift", new Vector2(pos.X + pad, y), fs, C_DIM);
-Text(frame, FmtMass(_ao) + " / " + FmtMass(_b),
+Text(frame, FmtMass(_as) + " / " + FmtMass(_b),
 new Vector2(pos.X + size.X - pad, y), fs, over ? C_BAD : C_INK, TextAlignment.RIGHT);
 y += rowH * 0.75f;
 }
@@ -3386,7 +3423,7 @@ float fs = size.Y * 0.048f;
 float y = pos.Y + pad;
 Text(frame, FmtMass(FleetOreTotal()) + " recovered", new Vector2(pos.X + pad, y), fs * 1.2f, C_GOOD);
 y += size.Y * 0.11f;
-Text(frame, Fmt(FleetMetresTotal(), 0) + " m drilled  ·  " + _au() + " shafts left",
+Text(frame, Fmt(FleetMetresTotal(), 0) + " m drilled  ·  " + _az() + " shafts left",
 new Vector2(pos.X + pad, y), fs * 0.85f, C_DIM);
 y += size.Y * 0.10f;
 if (fleet.Count == 0)

@@ -771,6 +771,16 @@ int stuckRetries;
 /// counter meant a ship that had struggled in a shaft would fault on its first
 /// docking hiccup instead of getting its three attempts.</summary>
 int dockRetries;
+/// <summary>Latches once inside the slow zone, so the mating run does not
+/// oscillate between approach and docking speed at the boundary.</summary>
+bool dockNearZone;
+/// <summary>Consecutive ticks the connector has reported Connectable. Latching
+/// on the first frame catches the ship still drifting sideways.</summary>
+int connectDebounce;
+/// <summary>Ticks since the mating distance last decreased.</summary>
+int dockStallTicks;
+/// <summary>Closest the connector has got on this approach, metres.</summary>
+double lastDockDist = double.MaxValue;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
@@ -3383,7 +3393,15 @@ void StInbound(bool entry)
 
 void StDocking(bool entry)
 {
-    if (entry) { statusLine = "Docking"; SetDrills(false); }
+    if (entry)
+    {
+        statusLine = "Docking";
+        SetDrills(false);
+        dockNearZone = false;
+        connectDebounce = 0;
+        dockStallTicks = 0;
+        lastDockDist = double.MaxValue;
+    }
 
     if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
     if (!homeDockSet) { EnterFault("No dock recorded"); return; }
@@ -3392,13 +3410,11 @@ void StDocking(bool entry)
     {
         SafeStop();
         dockRetries = 0;
+        dockNearZone = false;
         SetState(MinerState.Unloading);
         return;
     }
 
-    // Two-stage approach: first to a point squarely off the connector face, then
-    // straight down the mating axis. Coming in on a diagonal fails far more often
-    // than it works.
     Vector3D mate = homeDock.Position;
     Vector3D axis = homeDockForward;
     double standoff = Math.Max(6.0, shipRadius * 2.0);
@@ -3411,19 +3427,68 @@ void StDocking(bool entry)
     // Our own connector has to end up on the pad, not the controller.
     Vector3D connectorOffset = dockConnector.GetPosition() - shipPos;
 
+    // Face the connector the way it was facing when recorded. Done first so the
+    // alignment gate below reads this tick's error, not last tick's.
+    Orient(-axis, homeDockUp);
+
+    // ---- Stage 1: get squarely off the connector face ----------------------
     if (lateral > 1.0 || along > standoff * 1.4)
     {
+        dockNearZone = false;
         FlyTo(hold - connectorOffset, dockSpeed * 3.0);
-    }
-    else
-    {
-        FlyTo(mate - connectorOffset, dockSpeed);
-        if (dockConnector.Status == MyShipConnectorStatus.Connectable)
-            dockConnector.Connect();
+        return;
     }
 
-    // Face the connector the way it was facing when recorded.
-    Orient(-axis, homeDockUp);
+    // ---- Stage 2: stop and square up before committing ---------------------
+    // PAM holds station at the approach point and aligns to within ten degrees
+    // before it starts the mating run at all. Translating and rotating at the
+    // same time is what produces the diagonal arrivals that bounce off the
+    // collar — which the old code warned about in a comment and then did anyway.
+    if (alignError > 10.0 && !dockNearZone)
+    {
+        FlyTo(hold - connectorOffset, dockSpeed);
+        statusLine = "Docking — squaring up";
+        return;
+    }
+
+    // ---- Stage 3: mating run -----------------------------------------------
+    // The slow zone latches. Without it the ship oscillates between approach
+    // speed and mating speed at the boundary, which reads as juddering and
+    // makes the final centimetres take far longer than they should.
+    double mateDist = Vector3D.Distance(shipPos + connectorOffset, mate);
+    double nearDist = Math.Max(1.5, Math.Min(5.0, shipRadius * 0.3));
+    if (mateDist <= nearDist) dockNearZone = true;
+
+    FlyTo(mate - connectorOffset, dockNearZone ? dockSpeed : dockSpeed * 2.5);
+
+    if (dockConnector.Status == MyShipConnectorStatus.Connectable)
+    {
+        // Do not grab the first frame it is possible. PAM waits several ticks of
+        // continuous connectable status first, because latching while still
+        // drifting sideways either fails outright or yanks the ship straight.
+        connectDebounce++;
+        if (connectDebounce > 5) dockConnector.Connect();
+        dockStallTicks = 0;
+        return;
+    }
+
+    connectDebounce = 0;
+
+    // ---- Stalled approach detection ----------------------------------------
+    // The watchdog would eventually catch this, but four minutes of a ship
+    // grinding against a collar is not a useful failure. PAM notices in about
+    // two seconds by watching whether the distance is still falling.
+    double rounded = Math.Round(mateDist, 1);
+    if (rounded < lastDockDist) { lastDockDist = rounded; dockStallTicks = 0; }
+    else dockStallTicks++;
+
+    if (dockStallTicks > 20)
+    {
+        Log("Dock approach stalled at " + Fmt(mateDist, 1) + "m — backing off");
+        dockRetries++;
+        if (dockRetries >= 3) { EnterFault("Could not dock after 3 attempts"); return; }
+        SetState(MinerState.Inbound);
+    }
 }
 
 // ---------------------------------------------------------------------------

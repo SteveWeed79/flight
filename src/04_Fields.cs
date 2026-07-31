@@ -145,6 +145,16 @@ int stuckRetries;
 /// counter meant a ship that had struggled in a shaft would fault on its first
 /// docking hiccup instead of getting its three attempts.</summary>
 int dockRetries;
+/// <summary>Latches once inside the slow zone, so the mating run does not
+/// oscillate between approach and docking speed at the boundary.</summary>
+bool dockNearZone;
+/// <summary>Consecutive ticks the connector has reported Connectable. Latching
+/// on the first frame catches the ship still drifting sideways.</summary>
+int connectDebounce;
+/// <summary>Ticks since the mating distance last decreased.</summary>
+int dockStallTicks;
+/// <summary>Closest the connector has got on this approach, metres.</summary>
+double lastDockDist = double.MaxValue;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
