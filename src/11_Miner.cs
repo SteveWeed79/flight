@@ -17,6 +17,7 @@ void TickMiner()
     Watchdog();
     UpdateOreScan();
     EjectWhileFlying();
+    if (!Docked) UpdateFuelModel();
 
     // Belt and braces: if we are off the connector, the thrusters are on. Full
     // stop. Something else — an Event Controller, a timer, a player — is free to
@@ -578,6 +579,12 @@ bool HasReservesForWork()
 {
     if (batteryFill < minBattery) return false;
     if (hydrogenTanks.Count > 0 && hydrogenFill < minHydrogen) return false;
+
+    // The measured check, once the ship has told us how much it drinks. A fixed
+    // percentage is wasteful on a short hop and fatal on a long one; this asks
+    // the only question that matters — is there still enough to get home.
+    if (FuelCriticalForReturn()) return false;
+
     return true;
 }
 

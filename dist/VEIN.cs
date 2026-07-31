@@ -802,6 +802,23 @@ double hydrogenFill;
 /// <summary>kg of valuable ore aboard right now.</summary>
 double oreAboard;
 
+// ---- Fuel model -----------------------------------------------------------
+// Hydrogen is the only resource that genuinely runs out. Batteries recharge from
+// solar or a reactor mid-flight; hydrogen refills at base, or off ice you have
+// to mine first. So the question that matters is not "am I below 25%" but "have
+// I still got enough to get home from here" — which depends on how far away we
+// are and how hard this particular ship drinks.
+/// <summary>Measured hydrogen fraction consumed per metre travelled.</summary>
+double hydroPerMetre;
+/// <summary>True once we have a usable burn-rate measurement.</summary>
+bool hydroCalibrated;
+/// <summary>Tank level at the last sample point.</summary>
+double hydroSampleFill;
+/// <summary>Where we were at the last sample point.</summary>
+Vector3D hydroSamplePos;
+/// <summary>Distance from waypoint 0 to waypoint i, metres. Index-aligned with <see cref="path"/>.</summary>
+double[] pathCumulative = new double[0];
+
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
 MinerState prevState = MinerState.Idle;
@@ -1985,6 +2002,72 @@ void SetTanksFilling(bool filling)
     }
 }
 
+// ---------------------------------------------------------------------------
+//  FUEL MODEL
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Learn how much hydrogen this ship burns per metre, by watching it fly.
+///
+/// No configuration and no assumptions about thruster count: a ship with forty
+/// hydrogen thrusters measures a high rate and turns for home early, while a
+/// frugal one runs until it is genuinely low. Sampled over long intervals so
+/// that hovering, drilling and station-keeping average out.
+/// </summary>
+void UpdateFuelModel()
+{
+    if (hydrogenTanks.Count == 0) return;
+
+    if (hydroSamplePos == Vector3D.Zero)
+    {
+        hydroSamplePos = shipPos;
+        hydroSampleFill = hydrogenFill;
+        return;
+    }
+
+    double travelled = Vector3D.Distance(shipPos, hydroSamplePos);
+    if (travelled < 150.0) return;              // too short to mean anything
+
+    double used = hydroSampleFill - hydrogenFill;
+    hydroSamplePos = shipPos;
+    hydroSampleFill = hydrogenFill;
+
+    // Refuelling, or a generator outpacing the thrusters. Nothing to learn.
+    if (used <= 0) return;
+
+    double rate = used / travelled;
+
+    // Exponential moving average. A single leg through a gravity well is not
+    // representative of the whole route, and neither is a lazy drift in space.
+    hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
+    hydroCalibrated = true;
+}
+
+/// <summary>
+/// Fraction of a tank needed to fly the recorded route home from here, with
+/// margin. Returns 0 until the burn rate has been measured.
+/// </summary>
+double FuelToGetHome()
+{
+    if (!hydroCalibrated || hydrogenTanks.Count == 0) return 0;
+
+    double distance = DistanceHomeAlongPath();
+    if (distance <= 0) return 0;
+
+    // 1.6x. The return leg is the loaded one, and a loaded ship burns more than
+    // the empty one that measured the rate on the way out.
+    return distance * hydroPerMetre * 1.6;
+}
+
+/// <summary>True when we have only just enough fuel left to reach the dock.</summary>
+bool FuelCriticalForReturn()
+{
+    double need = FuelToGetHome();
+    if (need <= 0) return false;
+    // Five points of tank held back for docking manoeuvres on arrival.
+    return hydrogenFill < need + 0.05;
+}
+
 bool NeedsService()
 {
     return batteryFill < minBattery || hydrogenFill < minHydrogen;
@@ -2409,6 +2492,7 @@ void StopRecording()
     if (!recording) return;
     AddWaypoint(true);
     recording = false;
+    BuildPathDistances();
     ComputeMaxFlyableMass();
     Log("Recorded " + path.Count + " waypoints, "
         + (maxFlyableMass > 0 ? "lift limit " + Fmt(maxFlyableMass / 1000.0, 1) + "t" : "no gravity on route"));
@@ -2547,6 +2631,35 @@ bool OverLiftLimit()
 //  FOLLOWING
 // ---------------------------------------------------------------------------
 
+/// <summary>
+/// Precompute distance from the dock to each waypoint, so "how far is home"
+/// is a lookup rather than a walk of the whole path every tick.
+/// </summary>
+void BuildPathDistances()
+{
+    pathCumulative = new double[path.Count];
+    double total = 0;
+    for (int i = 0; i < path.Count; i++)
+    {
+        if (i > 0) total += Vector3D.Distance(path[i].Position, path[i - 1].Position);
+        pathCumulative[i] = total;
+    }
+}
+
+/// <summary>
+/// Metres still to fly to reach the dock, following the recorded route rather
+/// than the straight line — which is the distance that actually costs fuel.
+/// </summary>
+double DistanceHomeAlongPath()
+{
+    if (path.Count == 0) return 0;
+    if (pathCumulative.Length != path.Count) BuildPathDistances();
+
+    int idx = Math.Max(0, Math.Min(path.Count - 1, pathIndex));
+    // Route distance from waypoint 0, plus however far off that waypoint we are.
+    return pathCumulative[idx] + Vector3D.Distance(shipPos, path[idx].Position);
+}
+
 double WaypointReached { get { return Math.Max(4.0, shipRadius * 1.5); } }
 
 /// <summary>Nearest waypoint to the ship. Used to rejoin the route from wherever
@@ -2650,6 +2763,7 @@ void TickMiner()
     Watchdog();
     UpdateOreScan();
     EjectWhileFlying();
+    if (!Docked) UpdateFuelModel();
 
     // Belt and braces: if we are off the connector, the thrusters are on. Full
     // stop. Something else — an Event Controller, a timer, a player — is free to
@@ -3211,6 +3325,12 @@ bool HasReservesForWork()
 {
     if (batteryFill < minBattery) return false;
     if (hydrogenTanks.Count > 0 && hydrogenFill < minHydrogen) return false;
+
+    // The measured check, once the ship has told us how much it drinks. A fixed
+    // percentage is wasteful on a short hop and fatal on a long one; this asks
+    // the only question that matters — is there still enough to get home.
+    if (FuelCriticalForReturn()) return false;
+
     return true;
 }
 
@@ -4389,6 +4509,12 @@ void RenderMiner()
         sb.Append('\n');
     }
 
+    if (hydroCalibrated)
+    {
+        sb.Append("Fuel   burn ").Append(Fmt(hydroPerMetre * 100000, 2))
+          .Append("%/km, return needs ").Append(Fmt(FuelToGetHome() * 100, 0)).Append("%\n");
+    }
+
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 
     if (flightActive)
@@ -4854,6 +4980,7 @@ void LoadState()
             }
         }
 
+        BuildPathDistances();
         ComputeMaxFlyableMass();
 
         if (path.Count > 0 || job.IsSet)
@@ -5192,6 +5319,19 @@ void DrawShipPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
         Text(frame, "lift", new Vector2(pos.X + pad, y), fs, C_DIM);
         Text(frame, FmtMass(shipMass) + " / " + FmtMass(maxFlyableMass),
              new Vector2(pos.X + size.X - pad, y), fs, over ? C_BAD : C_INK, TextAlignment.RIGHT);
+        y += rowH * 0.75f;
+    }
+
+    // Measured fuel reserve. Shown rather than hidden, so you can see what the
+    // ship has learned about its own thirst and judge whether to trust it.
+    if (hydroCalibrated)
+    {
+        double need = FuelToGetHome();
+        bool tight = hydrogenFill < need + 0.15;
+        Text(frame, "return needs", new Vector2(pos.X + pad, y), fs, C_DIM);
+        Text(frame, Fmt(need * 100, 0) + "% H2",
+             new Vector2(pos.X + size.X - pad, y), fs, tight ? C_WARN : C_INK,
+             TextAlignment.RIGHT);
         y += rowH * 0.75f;
     }
 

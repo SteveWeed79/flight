@@ -102,6 +102,12 @@ void RenderMiner()
         sb.Append('\n');
     }
 
+    if (hydroCalibrated)
+    {
+        sb.Append("Fuel   burn ").Append(Fmt(hydroPerMetre * 100000, 2))
+          .Append("%/km, return needs ").Append(Fmt(FuelToGetHome() * 100, 0)).Append("%\n");
+    }
+
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 
     if (flightActive)

@@ -268,6 +268,72 @@ void SetTanksFilling(bool filling)
     }
 }
 
+// ---------------------------------------------------------------------------
+//  FUEL MODEL
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// Learn how much hydrogen this ship burns per metre, by watching it fly.
+///
+/// No configuration and no assumptions about thruster count: a ship with forty
+/// hydrogen thrusters measures a high rate and turns for home early, while a
+/// frugal one runs until it is genuinely low. Sampled over long intervals so
+/// that hovering, drilling and station-keeping average out.
+/// </summary>
+void UpdateFuelModel()
+{
+    if (hydrogenTanks.Count == 0) return;
+
+    if (hydroSamplePos == Vector3D.Zero)
+    {
+        hydroSamplePos = shipPos;
+        hydroSampleFill = hydrogenFill;
+        return;
+    }
+
+    double travelled = Vector3D.Distance(shipPos, hydroSamplePos);
+    if (travelled < 150.0) return;              // too short to mean anything
+
+    double used = hydroSampleFill - hydrogenFill;
+    hydroSamplePos = shipPos;
+    hydroSampleFill = hydrogenFill;
+
+    // Refuelling, or a generator outpacing the thrusters. Nothing to learn.
+    if (used <= 0) return;
+
+    double rate = used / travelled;
+
+    // Exponential moving average. A single leg through a gravity well is not
+    // representative of the whole route, and neither is a lazy drift in space.
+    hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
+    hydroCalibrated = true;
+}
+
+/// <summary>
+/// Fraction of a tank needed to fly the recorded route home from here, with
+/// margin. Returns 0 until the burn rate has been measured.
+/// </summary>
+double FuelToGetHome()
+{
+    if (!hydroCalibrated || hydrogenTanks.Count == 0) return 0;
+
+    double distance = DistanceHomeAlongPath();
+    if (distance <= 0) return 0;
+
+    // 1.6x. The return leg is the loaded one, and a loaded ship burns more than
+    // the empty one that measured the rate on the way out.
+    return distance * hydroPerMetre * 1.6;
+}
+
+/// <summary>True when we have only just enough fuel left to reach the dock.</summary>
+bool FuelCriticalForReturn()
+{
+    double need = FuelToGetHome();
+    if (need <= 0) return false;
+    // Five points of tank held back for docking manoeuvres on arrival.
+    return hydrogenFill < need + 0.05;
+}
+
 bool NeedsService()
 {
     return batteryFill < minBattery || hydrogenFill < minHydrogen;

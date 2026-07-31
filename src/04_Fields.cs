@@ -156,6 +156,23 @@ double hydrogenFill;
 /// <summary>kg of valuable ore aboard right now.</summary>
 double oreAboard;
 
+// ---- Fuel model -----------------------------------------------------------
+// Hydrogen is the only resource that genuinely runs out. Batteries recharge from
+// solar or a reactor mid-flight; hydrogen refills at base, or off ice you have
+// to mine first. So the question that matters is not "am I below 25%" but "have
+// I still got enough to get home from here" — which depends on how far away we
+// are and how hard this particular ship drinks.
+/// <summary>Measured hydrogen fraction consumed per metre travelled.</summary>
+double hydroPerMetre;
+/// <summary>True once we have a usable burn-rate measurement.</summary>
+bool hydroCalibrated;
+/// <summary>Tank level at the last sample point.</summary>
+double hydroSampleFill;
+/// <summary>Where we were at the last sample point.</summary>
+Vector3D hydroSamplePos;
+/// <summary>Distance from waypoint 0 to waypoint i, metres. Index-aligned with <see cref="path"/>.</summary>
+double[] pathCumulative = new double[0];
+
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
 MinerState prevState = MinerState.Idle;

@@ -267,6 +267,19 @@ void DrawShipPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
         y += rowH * 0.75f;
     }
 
+    // Measured fuel reserve. Shown rather than hidden, so you can see what the
+    // ship has learned about its own thirst and judge whether to trust it.
+    if (hydroCalibrated)
+    {
+        double need = FuelToGetHome();
+        bool tight = hydrogenFill < need + 0.15;
+        Text(frame, "return needs", new Vector2(pos.X + pad, y), fs, C_DIM);
+        Text(frame, Fmt(need * 100, 0) + "% H2",
+             new Vector2(pos.X + size.X - pad, y), fs, tight ? C_WARN : C_INK,
+             TextAlignment.RIGHT);
+        y += rowH * 0.75f;
+    }
+
     Text(frame, "scout", new Vector2(pos.X + pad, y), fs, C_DIM);
     Text(frame, oreModAvailable ? "ore raycast" : "probe map",
          new Vector2(pos.X + size.X - pad, y), fs,

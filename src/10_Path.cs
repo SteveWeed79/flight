@@ -33,6 +33,7 @@ void StopRecording()
     if (!recording) return;
     AddWaypoint(true);
     recording = false;
+    BuildPathDistances();
     ComputeMaxFlyableMass();
     Log("Recorded " + path.Count + " waypoints, "
         + (maxFlyableMass > 0 ? "lift limit " + Fmt(maxFlyableMass / 1000.0, 1) + "t" : "no gravity on route"));
@@ -170,6 +171,35 @@ bool OverLiftLimit()
 // ---------------------------------------------------------------------------
 //  FOLLOWING
 // ---------------------------------------------------------------------------
+
+/// <summary>
+/// Precompute distance from the dock to each waypoint, so "how far is home"
+/// is a lookup rather than a walk of the whole path every tick.
+/// </summary>
+void BuildPathDistances()
+{
+    pathCumulative = new double[path.Count];
+    double total = 0;
+    for (int i = 0; i < path.Count; i++)
+    {
+        if (i > 0) total += Vector3D.Distance(path[i].Position, path[i - 1].Position);
+        pathCumulative[i] = total;
+    }
+}
+
+/// <summary>
+/// Metres still to fly to reach the dock, following the recorded route rather
+/// than the straight line — which is the distance that actually costs fuel.
+/// </summary>
+double DistanceHomeAlongPath()
+{
+    if (path.Count == 0) return 0;
+    if (pathCumulative.Length != path.Count) BuildPathDistances();
+
+    int idx = Math.Max(0, Math.Min(path.Count - 1, pathIndex));
+    // Route distance from waypoint 0, plus however far off that waypoint we are.
+    return pathCumulative[idx] + Vector3D.Distance(shipPos, path[idx].Position);
+}
 
 double WaypointReached { get { return Math.Max(4.0, shipRadius * 1.5); } }
 

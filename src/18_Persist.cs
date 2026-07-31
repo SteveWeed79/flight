@@ -136,6 +136,7 @@ void LoadState()
             }
         }
 
+        BuildPathDistances();
         ComputeMaxFlyableMass();
 
         if (path.Count > 0 || job.IsSet)
