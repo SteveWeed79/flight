@@ -69,7 +69,7 @@ public enum Role
     Dispatcher
 }
 
-/// <summary>Miner top-level lifecycle. Orthogonal to <see cref="NavState"/>.</summary>
+/// <summary>Miner lifecycle. Exactly one of these is active at a time.</summary>
 public enum MinerState
 {
     /// <summary>Parked. Not mining, not moving. Safe.</summary>
@@ -161,33 +161,6 @@ public enum ShaftResult
     Stuck,
     /// <summary>Power/fuel forced an abort.</summary>
     Aborted
-}
-
-/// <summary>IGC message kinds. Kept short — these go on the wire every tick.</summary>
-public enum MsgType
-{
-    /// <summary>Dispatcher -> all. "I exist, here is the job."</summary>
-    Beacon,
-    /// <summary>Miner -> dispatcher. "I'm alive, here's my state."</summary>
-    Heartbeat,
-    /// <summary>Miner -> dispatcher. "Give me a shaft."</summary>
-    LeaseRequest,
-    /// <summary>Dispatcher -> miner. "Dig cell (c,r), max depth d."</summary>
-    LeaseGrant,
-    /// <summary>Dispatcher -> miner. "No work available."</summary>
-    LeaseDenied,
-    /// <summary>Miner -> dispatcher. "Done with (c,r), got X kg in Y m."</summary>
-    ShaftReport,
-    /// <summary>Miner -> dispatcher. "I need a dock slot."</summary>
-    DockRequest,
-    /// <summary>Dispatcher -> miner. "Use connector N" / "wait".</summary>
-    DockGrant,
-    /// <summary>Miner -> dispatcher. "Released dock slot N."</summary>
-    DockRelease,
-    /// <summary>Any -> all. Ore found at a world position (scout result).</summary>
-    OreSighting,
-    /// <summary>Console command relayed across the fleet.</summary>
-    Command
 }
 #endregion
 
@@ -682,7 +655,6 @@ readonly List<IMyTextSurface> screens = new List<IMyTextSurface>();
 readonly List<IMyTextSurface> panels = new List<IMyTextSurface>();
 readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
 readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
-readonly List<IMyShipConnector> baseConnectors = new List<IMyShipConnector>(); // dispatcher side
 
 /// <summary>Tick of the last full block rescan. We rescan periodically so that
 /// welding on a new thruster mid-job is picked up without a recompile.</summary>
@@ -725,13 +697,8 @@ Vector3D shipVel;
 Vector3D gravity;
 double speed;
 
-/// <summary>Where the flight controller is currently trying to put the ship.</summary>
-Vector3D flightTarget;
-double flightMaxSpeed;
+/// <summary>True while the flight controller is driving. Display only.</summary>
 bool flightActive;
-/// <summary>Desired facing. Zero-length means "hold current orientation".</summary>
-Vector3D faceDirection = Vector3D.Zero;
-Vector3D faceUp = Vector3D.Zero;
 /// <summary>Distance to the active flight target, metres.</summary>
 double distToTarget;
 /// <summary>Degrees of angular error on the current orientation command.</summary>
@@ -791,6 +758,11 @@ int noOreTicks;
 double stuckRefDepth;
 int stuckTicks;
 int stuckRetries;
+/// <summary>Failed docking approaches. Deliberately separate from
+/// <see cref="stuckRetries"/>: they count unrelated things, and sharing one
+/// counter meant a ship that had struggled in a shaft would fault on its first
+/// docking hiccup instead of getting its three attempts.</summary>
+int dockRetries;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
@@ -821,7 +793,6 @@ double[] pathCumulative = new double[0];
 
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
-MinerState prevState = MinerState.Idle;
 /// <summary>Ticks spent in the current state. Watchdog input.</summary>
 int stateTicks;
 /// <summary>True only on the first tick of a state. Where per-state setup happens.</summary>
@@ -970,7 +941,6 @@ void SetState(MinerState next)
         stateEntry = true;
         return;
     }
-    prevState = state;
     state = next;
     stateTicks = 0;
     stateEntry = true;
@@ -1000,6 +970,12 @@ void Watchdog()
         case MinerState.Descending:
         case MinerState.Ascending:
             MarkCellStuck();
+            // Must be set explicitly. FinishShaft reads pendingResult when the
+            // ship clears the hole, and without this it would read whatever the
+            // *previous* shaft left behind — recording a cell the ship could not
+            // even reach as completed, or worse, as unfinished and worth
+            // retrying forever.
+            pendingResult = ShaftResult.Stuck;
             SetState(MinerState.Ascending);
             break;
 
@@ -1014,9 +990,9 @@ void Watchdog()
         // Hung docking is recoverable: back off and try the approach again.
         // Three failures means something is genuinely wrong with the dock.
         case MinerState.Docking:
-            stuckRetries++;
-            if (stuckRetries >= 3) EnterFault("Could not dock after 3 attempts");
-            else { Log("Docking retry " + stuckRetries); SetState(MinerState.Inbound); }
+            dockRetries++;
+            if (dockRetries >= 3) EnterFault("Could not dock after 3 attempts");
+            else { Log("Docking retry " + dockRetries); SetState(MinerState.Inbound); }
             break;
 
         // Everything else: park it and ask for help rather than guess.
@@ -1034,6 +1010,9 @@ void EnterFault(string why)
     Log("FAULT: " + why);
     state = MinerState.Fault;
     stateTicks = 0;
+    // Entry tick must fire. SafeStop is called below as well, but a state that
+    // never sees stateEntry is a trap for anything added to StFault later.
+    stateEntry = true;
     jobRunning = false;
     ReleaseLease(ShaftResult.Aborted);
     SafeStop();
@@ -1044,6 +1023,7 @@ void ClearFault()
 {
     faultReason = "";
     stuckRetries = 0;
+    dockRetries = 0;
     SetState(MinerState.Idle);
     Log("Fault cleared");
 }
@@ -1104,7 +1084,6 @@ void ScanBlocks()
     gyros.Clear(); thrusters.Clear(); drills.Clear(); cargo.Clear();
     batteries.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
     screens.Clear(); cameras.Clear(); oreDetectors.Clear();
-    baseConnectors.Clear();
 
     // ---- Controller ---------------------------------------------------------
     // A Remote Control is strongly preferred: it is the only controller with a
@@ -1150,7 +1129,6 @@ void ScanBlocks()
         if (c.Status == MyShipConnectorStatus.Connected) dockConnector = c;
         else if (dockConnector == null) dockConnector = c;
     }
-    if (role == Role.Dispatcher) baseConnectors.AddRange(connectors);
 
     // ---- Sensing ------------------------------------------------------------
     GridTerminalSystem.GetBlocksOfType(cameras, Mine);
@@ -1255,17 +1233,13 @@ void MeasureShip()
     Vector3D ctrlPos = controller.GetPosition();
 
     double maxLateral = 0;
-    double furthestForward = double.MinValue;
     Vector3D offsetSum = Vector3D.Zero;
 
     for (int i = 0; i < drills.Count; i++)
     {
         Vector3D local = Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
-        // Local Z is backward in SE's convention, so forward reach is -Z.
-        double forward = -local.Z;
         double lateral = Math.Sqrt(local.X * local.X + local.Y * local.Y);
         if (lateral > maxLateral) maxLateral = lateral;
-        if (forward > furthestForward) furthestForward = forward;
         offsetSum += local;
     }
 
@@ -1489,8 +1463,6 @@ double StoppingAccel(Vector3D dir)
 void FlyTo(Vector3D target, double maxSpeed)
 {
     flightActive = true;
-    flightTarget = target;
-    flightMaxSpeed = maxSpeed;
 
     if (controller == null) return;
 
@@ -1820,22 +1792,6 @@ static bool IsValuableOre(MyItemType t)
     return t.TypeId == TYPE_ORE && t.SubtypeId != SUB_STONE;
 }
 
-/// <summary>Ore currently sitting in the drill heads. The adaptive-depth signal.</summary>
-double OreInDrills()
-{
-    double total = 0;
-    for (int i = 0; i < drills.Count; i++)
-    {
-        IMyInventory inv = drills[i].GetInventory(0);
-        if (inv == null) continue;
-        itemScratch.Clear();
-        inv.GetItems(itemScratch);
-        for (int k = 0; k < itemScratch.Count; k++)
-            if (IsValuableOre(itemScratch[k].Type)) total += (double)itemScratch[k].Amount;
-    }
-    return total;
-}
-
 /// <summary>
 /// Total mass moved through the drills this shaft, including whatever the
 /// conveyors already pulled back into cargo. Using drill contents alone would
@@ -2083,11 +2039,6 @@ bool FuelCriticalForReturn()
     if (need <= 0) return false;
     // Five points of tank held back for docking manoeuvres on arrival.
     return hydrogenFill < need + 0.05;
-}
-
-bool NeedsService()
-{
-    return batteryFill < minBattery || hydrogenFill < minHydrogen;
 }
 
 bool ServiceComplete()
@@ -3310,7 +3261,7 @@ void StDocking(bool entry)
     if (Docked)
     {
         SafeStop();
-        stuckRetries = 0;
+        dockRetries = 0;
         SetState(MinerState.Unloading);
         return;
     }

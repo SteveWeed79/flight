@@ -148,8 +148,6 @@ double StoppingAccel(Vector3D dir)
 void FlyTo(Vector3D target, double maxSpeed)
 {
     flightActive = true;
-    flightTarget = target;
-    flightMaxSpeed = maxSpeed;
 
     if (controller == null) return;
 

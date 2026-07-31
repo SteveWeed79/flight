@@ -472,7 +472,7 @@ void StDocking(bool entry)
     if (Docked)
     {
         SafeStop();
-        stuckRetries = 0;
+        dockRetries = 0;
         SetState(MinerState.Unloading);
         return;
     }

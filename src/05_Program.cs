@@ -97,7 +97,6 @@ void SetState(MinerState next)
         stateEntry = true;
         return;
     }
-    prevState = state;
     state = next;
     stateTicks = 0;
     stateEntry = true;
@@ -127,6 +126,12 @@ void Watchdog()
         case MinerState.Descending:
         case MinerState.Ascending:
             MarkCellStuck();
+            // Must be set explicitly. FinishShaft reads pendingResult when the
+            // ship clears the hole, and without this it would read whatever the
+            // *previous* shaft left behind — recording a cell the ship could not
+            // even reach as completed, or worse, as unfinished and worth
+            // retrying forever.
+            pendingResult = ShaftResult.Stuck;
             SetState(MinerState.Ascending);
             break;
 
@@ -141,9 +146,9 @@ void Watchdog()
         // Hung docking is recoverable: back off and try the approach again.
         // Three failures means something is genuinely wrong with the dock.
         case MinerState.Docking:
-            stuckRetries++;
-            if (stuckRetries >= 3) EnterFault("Could not dock after 3 attempts");
-            else { Log("Docking retry " + stuckRetries); SetState(MinerState.Inbound); }
+            dockRetries++;
+            if (dockRetries >= 3) EnterFault("Could not dock after 3 attempts");
+            else { Log("Docking retry " + dockRetries); SetState(MinerState.Inbound); }
             break;
 
         // Everything else: park it and ask for help rather than guess.
@@ -161,6 +166,9 @@ void EnterFault(string why)
     Log("FAULT: " + why);
     state = MinerState.Fault;
     stateTicks = 0;
+    // Entry tick must fire. SafeStop is called below as well, but a state that
+    // never sees stateEntry is a trap for anything added to StFault later.
+    stateEntry = true;
     jobRunning = false;
     ReleaseLease(ShaftResult.Aborted);
     SafeStop();
@@ -171,6 +179,7 @@ void ClearFault()
 {
     faultReason = "";
     stuckRetries = 0;
+    dockRetries = 0;
     SetState(MinerState.Idle);
     Log("Fault cleared");
 }

@@ -13,7 +13,6 @@ void ScanBlocks()
     gyros.Clear(); thrusters.Clear(); drills.Clear(); cargo.Clear();
     batteries.Clear(); hydrogenTanks.Clear(); ejectors.Clear();
     screens.Clear(); cameras.Clear(); oreDetectors.Clear();
-    baseConnectors.Clear();
 
     // ---- Controller ---------------------------------------------------------
     // A Remote Control is strongly preferred: it is the only controller with a
@@ -59,7 +58,6 @@ void ScanBlocks()
         if (c.Status == MyShipConnectorStatus.Connected) dockConnector = c;
         else if (dockConnector == null) dockConnector = c;
     }
-    if (role == Role.Dispatcher) baseConnectors.AddRange(connectors);
 
     // ---- Sensing ------------------------------------------------------------
     GridTerminalSystem.GetBlocksOfType(cameras, Mine);
@@ -164,17 +162,13 @@ void MeasureShip()
     Vector3D ctrlPos = controller.GetPosition();
 
     double maxLateral = 0;
-    double furthestForward = double.MinValue;
     Vector3D offsetSum = Vector3D.Zero;
 
     for (int i = 0; i < drills.Count; i++)
     {
         Vector3D local = Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
-        // Local Z is backward in SE's convention, so forward reach is -Z.
-        double forward = -local.Z;
         double lateral = Math.Sqrt(local.X * local.X + local.Y * local.Y);
         if (lateral > maxLateral) maxLateral = lateral;
-        if (forward > furthestForward) furthestForward = forward;
         offsetSum += local;
     }
 

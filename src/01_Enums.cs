@@ -11,7 +11,7 @@ public enum Role
     Dispatcher
 }
 
-/// <summary>Miner top-level lifecycle. Orthogonal to <see cref="NavState"/>.</summary>
+/// <summary>Miner lifecycle. Exactly one of these is active at a time.</summary>
 public enum MinerState
 {
     /// <summary>Parked. Not mining, not moving. Safe.</summary>
@@ -105,29 +105,3 @@ public enum ShaftResult
     Aborted
 }
 
-/// <summary>IGC message kinds. Kept short — these go on the wire every tick.</summary>
-public enum MsgType
-{
-    /// <summary>Dispatcher -> all. "I exist, here is the job."</summary>
-    Beacon,
-    /// <summary>Miner -> dispatcher. "I'm alive, here's my state."</summary>
-    Heartbeat,
-    /// <summary>Miner -> dispatcher. "Give me a shaft."</summary>
-    LeaseRequest,
-    /// <summary>Dispatcher -> miner. "Dig cell (c,r), max depth d."</summary>
-    LeaseGrant,
-    /// <summary>Dispatcher -> miner. "No work available."</summary>
-    LeaseDenied,
-    /// <summary>Miner -> dispatcher. "Done with (c,r), got X kg in Y m."</summary>
-    ShaftReport,
-    /// <summary>Miner -> dispatcher. "I need a dock slot."</summary>
-    DockRequest,
-    /// <summary>Dispatcher -> miner. "Use connector N" / "wait".</summary>
-    DockGrant,
-    /// <summary>Miner -> dispatcher. "Released dock slot N."</summary>
-    DockRelease,
-    /// <summary>Any -> all. Ore found at a world position (scout result).</summary>
-    OreSighting,
-    /// <summary>Console command relayed across the fleet.</summary>
-    Command
-}

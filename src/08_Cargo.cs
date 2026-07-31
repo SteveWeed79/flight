@@ -69,22 +69,6 @@ static bool IsValuableOre(MyItemType t)
     return t.TypeId == TYPE_ORE && t.SubtypeId != SUB_STONE;
 }
 
-/// <summary>Ore currently sitting in the drill heads. The adaptive-depth signal.</summary>
-double OreInDrills()
-{
-    double total = 0;
-    for (int i = 0; i < drills.Count; i++)
-    {
-        IMyInventory inv = drills[i].GetInventory(0);
-        if (inv == null) continue;
-        itemScratch.Clear();
-        inv.GetItems(itemScratch);
-        for (int k = 0; k < itemScratch.Count; k++)
-            if (IsValuableOre(itemScratch[k].Type)) total += (double)itemScratch[k].Amount;
-    }
-    return total;
-}
-
 /// <summary>
 /// Total mass moved through the drills this shaft, including whatever the
 /// conveyors already pulled back into cargo. Using drill contents alone would
@@ -332,11 +316,6 @@ bool FuelCriticalForReturn()
     if (need <= 0) return false;
     // Five points of tank held back for docking manoeuvres on arrival.
     return hydrogenFill < need + 0.05;
-}
-
-bool NeedsService()
-{
-    return batteryFill < minBattery || hydrogenFill < minHydrogen;
 }
 
 bool ServiceComplete()

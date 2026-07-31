@@ -36,7 +36,6 @@ readonly List<IMyTextSurface> screens = new List<IMyTextSurface>();
 readonly List<IMyTextSurface> panels = new List<IMyTextSurface>();
 readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
 readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
-readonly List<IMyShipConnector> baseConnectors = new List<IMyShipConnector>(); // dispatcher side
 
 /// <summary>Tick of the last full block rescan. We rescan periodically so that
 /// welding on a new thruster mid-job is picked up without a recompile.</summary>
@@ -79,13 +78,8 @@ Vector3D shipVel;
 Vector3D gravity;
 double speed;
 
-/// <summary>Where the flight controller is currently trying to put the ship.</summary>
-Vector3D flightTarget;
-double flightMaxSpeed;
+/// <summary>True while the flight controller is driving. Display only.</summary>
 bool flightActive;
-/// <summary>Desired facing. Zero-length means "hold current orientation".</summary>
-Vector3D faceDirection = Vector3D.Zero;
-Vector3D faceUp = Vector3D.Zero;
 /// <summary>Distance to the active flight target, metres.</summary>
 double distToTarget;
 /// <summary>Degrees of angular error on the current orientation command.</summary>
@@ -145,6 +139,11 @@ int noOreTicks;
 double stuckRefDepth;
 int stuckTicks;
 int stuckRetries;
+/// <summary>Failed docking approaches. Deliberately separate from
+/// <see cref="stuckRetries"/>: they count unrelated things, and sharing one
+/// counter meant a ship that had struggled in a shaft would fault on its first
+/// docking hiccup instead of getting its three attempts.</summary>
+int dockRetries;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
@@ -175,7 +174,6 @@ double[] pathCumulative = new double[0];
 
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
-MinerState prevState = MinerState.Idle;
 /// <summary>Ticks spent in the current state. Watchdog input.</summary>
 int stateTicks;
 /// <summary>True only on the first tick of a state. Where per-state setup happens.</summary>
