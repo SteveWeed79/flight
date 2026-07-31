@@ -113,6 +113,7 @@ Run these as the Programmable Block's argument.
 | `job set <w> <h> <depth>` | Define the site at the ship's current position and attitude |
 | `job here` | Re-anchor the existing grid where the ship is now |
 | `job size <w> <h>` / `job depth <m>` | Adjust without re-anchoring |
+| `job push` | Send this miner's job frame to the dispatcher, which cannot anchor one itself |
 | `mode fixed\|autoore\|autovoid` | Depth strategy |
 | `order serpentine\|spiral\|prospect` | Shaft ordering |
 | `eject off\|stone\|stoneandice` | What to throw overboard |

@@ -130,9 +130,19 @@ Optional. A single miner works fine forever.
 1. Put a Programmable Block at your base with the same script.
 2. In its Custom Data set `role = Dispatcher`, and `dockSlots` to the number of
    connectors miners can unload at.
-3. Run `reload`, then define the job **from the dispatcher** — either fly a ship
-   there and use `job set`, or set the job on a miner and copy the values.
-4. Run `start` on the dispatcher.
+3. Run `reload` on it.
+4. Give it a job. A dispatcher at a base cannot anchor one itself — `job set`
+   reads the local remote control's attitude and the local drill face, and a base
+   has the wrong one of the first and none of the second. So set it on a **miner**
+   instead: fly the miner to the site, `job set 5 5 40` as usual, then
+
+   ```
+   job push
+   ```
+
+   The dispatcher adopts the frame, says so in its log, and re-beacons it to
+   every drone on the channel. The miner reports whether it was accepted.
+5. Run `start` on the dispatcher.
 
 Every miner on the same `channel` joins automatically. No pairing step. Each gets
 its own altitude lane over the site and its own shaft assignments.
@@ -142,6 +152,20 @@ coordinates *what* to dig, not *how to get there*.
 
 To stop the whole operation, run `stop` on the dispatcher — drones finish what
 they hold and come home. `fleet stop` relays the command to the drones directly.
+
+**Moving the site later** is the same `job push`, but the dispatcher refuses one
+while any drone still holds a shaft — adopting a frame renumbers every cell, and
+a drone holding index 7 would fly to whatever is index 7 on the new grid. Run
+`stop` on the dispatcher, let the drones come home, then push. The refusal says
+which case it was.
+
+### Running more than one squad
+
+Each dispatcher owns one site and one channel. For a second crew working a second
+deposit, set both that dispatcher and its miners to a different `channel` — say
+`VEIN-B` — and the two operations ignore each other completely. Miners only ever
+join a dispatcher on their own channel, and a miner that hears a second
+dispatcher on *its* channel logs it and stays with the first.
 
 ---
 
