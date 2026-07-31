@@ -390,6 +390,8 @@ void SampleShip()
 
     RefreshThrustCapacity();
     SampleInventories();
+    // The expensive half, at roughly 1 Hz.
+    if (tick % 6 == 0) SampleOre();
 }
 
 /// <summary>World position of the drill cutting face — the point that is

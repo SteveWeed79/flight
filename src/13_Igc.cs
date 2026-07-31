@@ -187,6 +187,19 @@ void OnBeacon(long src, string[] f)
 {
     if (role != Role.Miner) return;
 
+    // A second dispatcher on the same channel would otherwise steal the miner
+    // on every beacon, so leases come from one and reports go to whichever
+    // spoke last. Stay with the first one heard and say so.
+    if (dispatcherAddr != 0 && dispatcherAddr != src)
+    {
+        if (tick - lastDispatcherSeenTick < 600)
+        {
+            Log("Second dispatcher on channel '" + igcChannel + "' — ignoring it");
+            return;
+        }
+        Log("Switching dispatcher — previous one went quiet");
+    }
+
     dispatcherAddr = src;
     lastDispatcherSeenTick = tick;
 
@@ -209,6 +222,7 @@ void OnBeacon(long src, string[] f)
     job.Forward = DecV(f[8]);
     job.Down = DecV(f[9]);
 
+    if (!ValidateJobBasis()) return;
     if (reshaped || cells.Length != job.CellCount) RebuildCells();
 }
 

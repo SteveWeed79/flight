@@ -44,6 +44,43 @@ void SetJob(int width, int height, int depth)
         + Fmt(job.Spacing, 1) + "m");
 }
 
+/// <summary>
+/// Normalise and sanity-check a job frame that came from outside — restored
+/// Storage or a dispatcher beacon. Truncated or corrupt data yields zero-length
+/// or non-perpendicular axes, and nothing downstream checks: CellMouth collapses
+/// every shaft onto the origin and Orient is handed a zero forward, so the ship
+/// flies to one point and sits there with no indication why.
+/// </summary>
+/// <returns>False if the frame is unusable, in which case the job is cleared.</returns>
+bool ValidateJobBasis()
+{
+    if (job.Down.LengthSquared() < 1e-6 || job.Right.LengthSquared() < 1e-6
+        || job.Forward.LengthSquared() < 1e-6)
+    {
+        Log("Job frame is degenerate — clearing");
+        job.IsSet = false;
+        return false;
+    }
+
+    job.Down = Vector3D.Normalize(job.Down);
+    job.Right = Vector3D.Normalize(job.Right);
+    job.Forward = Vector3D.Normalize(job.Forward);
+
+    // Millimetre wire precision costs a little orthogonality; a badly skewed
+    // frame means the data is wrong, not merely rounded.
+    if (Math.Abs(Vector3D.Dot(job.Down, job.Right)) > 0.05
+        || Math.Abs(Vector3D.Dot(job.Down, job.Forward)) > 0.05
+        || Math.Abs(Vector3D.Dot(job.Right, job.Forward)) > 0.05)
+    {
+        Log("Job frame axes are not perpendicular — clearing");
+        job.IsSet = false;
+        return false;
+    }
+
+    if (job.Spacing < 0.1 || job.Spacing > 100) job.Spacing = derivedSpacing;
+    return true;
+}
+
 void RebuildCells()
 {
     cells = new YieldCell[job.CellCount];

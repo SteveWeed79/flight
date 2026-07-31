@@ -6,23 +6,30 @@ const string TYPE_ORE = "MyObjectBuilder_Ore";
 const string SUB_STONE = "Stone";
 const string SUB_ICE = "Ice";
 
-/// <summary>Recompute cargo fill, ore aboard, power and gas levels.</summary>
+/// <summary>
+/// Volumes, power and gas. Cheap enough to run every tick.
+///
+/// Deliberately does NOT enumerate items. CurrentVolume is a single property
+/// read, whereas GetItems fills a list per inventory — and a ship with ten
+/// drills and five containers was doing fifteen of those six times a second for
+/// a number that only feeds a one-hertz decision. Ore counting lives in
+/// SampleOre and runs far less often.
+/// </summary>
 void SampleInventories()
 {
-    double vol = 0, maxVol = 0, ore = 0;
+    double vol = 0, maxVol = 0;
 
     for (int i = 0; i < cargo.Count; i++)
-        AccumulateInventory(cargo[i].GetInventory(0), ref vol, ref maxVol, ref ore);
+        AccumulateVolume(cargo[i].GetInventory(0), ref vol, ref maxVol);
 
     // Drill inventories count too. On a ship without conveyors they are the
     // only storage there is, and on one with conveyors they are the buffer that
     // tells us whether ore is still arriving.
     for (int i = 0; i < drills.Count; i++)
-        AccumulateInventory(drills[i].GetInventory(0), ref vol, ref maxVol, ref ore);
+        AccumulateVolume(drills[i].GetInventory(0), ref vol, ref maxVol);
 
     cargoFill = maxVol > 0 ? vol / maxVol : 0;
     cargoVolume = vol;
-    oreAboard = ore;
 
     // ---- Power ------------------------------------------------------------
     double stored = 0, capacity = 0;
@@ -48,19 +55,36 @@ void SampleInventories()
     hydrogenFill = tanks > 0 ? gas / tanks : 1.0;
 }
 
-void AccumulateInventory(IMyInventory inv, ref double vol, ref double maxVol, ref double ore)
+static void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
 {
     if (inv == null) return;
     vol += (double)inv.CurrentVolume;
     maxVol += (double)inv.MaxVolume;
+}
 
+/// <summary>
+/// Kilograms of valuable ore aboard. The expensive half of inventory sampling,
+/// so it runs at about 1 Hz rather than every tick. Adaptive depth already
+/// requires sixty dry ticks before it acts, so a second of lag changes nothing;
+/// callers that need an exact figure at a shaft boundary call this directly.
+/// </summary>
+void SampleOre()
+{
+    double ore = 0;
+    for (int i = 0; i < cargo.Count; i++)
+        AccumulateOre(cargo[i].GetInventory(0), ref ore);
+    for (int i = 0; i < drills.Count; i++)
+        AccumulateOre(drills[i].GetInventory(0), ref ore);
+    oreAboard = ore;
+}
+
+void AccumulateOre(IMyInventory inv, ref double ore)
+{
+    if (inv == null) return;
     itemScratch.Clear();
     inv.GetItems(itemScratch);
     for (int i = 0; i < itemScratch.Count; i++)
-    {
-        MyInventoryItem it = itemScratch[i];
-        if (IsValuableOre(it.Type)) ore += (double)it.Amount;
-    }
+        if (IsValuableOre(itemScratch[i].Type)) ore += (double)itemScratch[i].Amount;
 }
 
 /// <summary>Ore that is worth carrying home. Stone is not.</summary>

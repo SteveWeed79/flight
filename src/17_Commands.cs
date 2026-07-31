@@ -183,6 +183,16 @@ void CmdJob(string[] a)
         return;
     }
 
+    // Anchoring uses the ship's live position and attitude. Doing that while the
+    // ship is nose-down inside a shaft would put the job plane underground and
+    // silently invalidate the whole survey, so it is refused unless parked.
+    if ((a[1] == "set" || a[1] == "here") && role == Role.Miner
+        && state != MinerState.Idle && state != MinerState.Fault && !Docked)
+    {
+        Log("Cannot anchor a job while flying — run 'stop' or 'halt' first");
+        return;
+    }
+
     switch (a[1])
     {
         case "set":

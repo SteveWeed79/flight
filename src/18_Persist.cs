@@ -182,7 +182,7 @@ void LoadJob(string[] f)
     job.Forward = DecV(f[7]);
     job.Down = DecV(f[8]);
 
-    if (job.Spacing < 0.1) job.Spacing = 2.4;
+    if (!ValidateJobBasis()) return;
     RebuildCells();
 }
 

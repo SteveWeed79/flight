@@ -174,6 +174,7 @@ void StSelecting(bool entry)
 /// <summary>Set up the per-shaft counters and head for the hole.</summary>
 void BeginShaft()
 {
+    SampleOre();          // exact figure to measure this shaft's yield against
     shaftDepth = 0;
     shaftMaxDepth = 0;
     shaftStartOre = oreAboard;
@@ -371,6 +372,7 @@ void StAscending(bool entry)
 void FinishShaft()
 {
     ShaftResult result = pendingResult;
+    SampleOre();          // exact figure now the shaft is finished
     double ore = ShaftOreSoFar();
 
     // Yield is kilograms per metre *drilled*, so the vacuum we fell through to

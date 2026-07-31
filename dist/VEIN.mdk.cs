@@ -73,7 +73,7 @@ namespace VEIN
          *//////////////////////////////////////////////////////////////////////////////
 
         const string VEIN_VERSION = "1.0.0";
-        const string STORAGE_REV  = "1";
+        const string STORAGE_REV  = "2";   // bump on ANY change to a persisted enum or field order
         #endregion
 
         #region 01_Enums.cs
@@ -1726,6 +1726,8 @@ namespace VEIN
 
             RefreshThrustCapacity();
             SampleInventories();
+            // The expensive half, at roughly 1 Hz.
+            if (tick % 6 == 0) SampleOre();
         }
 
         /// <summary>World position of the drill cutting face — the point that is
@@ -1750,23 +1752,30 @@ namespace VEIN
         const string SUB_STONE = "Stone";
         const string SUB_ICE = "Ice";
 
-        /// <summary>Recompute cargo fill, ore aboard, power and gas levels.</summary>
+        /// <summary>
+        /// Volumes, power and gas. Cheap enough to run every tick.
+        ///
+        /// Deliberately does NOT enumerate items. CurrentVolume is a single property
+        /// read, whereas GetItems fills a list per inventory — and a ship with ten
+        /// drills and five containers was doing fifteen of those six times a second for
+        /// a number that only feeds a one-hertz decision. Ore counting lives in
+        /// SampleOre and runs far less often.
+        /// </summary>
         void SampleInventories()
         {
-            double vol = 0, maxVol = 0, ore = 0;
+            double vol = 0, maxVol = 0;
 
             for (int i = 0; i < cargo.Count; i++)
-                AccumulateInventory(cargo[i].GetInventory(0), ref vol, ref maxVol, ref ore);
+                AccumulateVolume(cargo[i].GetInventory(0), ref vol, ref maxVol);
 
             // Drill inventories count too. On a ship without conveyors they are the
             // only storage there is, and on one with conveyors they are the buffer that
             // tells us whether ore is still arriving.
             for (int i = 0; i < drills.Count; i++)
-                AccumulateInventory(drills[i].GetInventory(0), ref vol, ref maxVol, ref ore);
+                AccumulateVolume(drills[i].GetInventory(0), ref vol, ref maxVol);
 
             cargoFill = maxVol > 0 ? vol / maxVol : 0;
             cargoVolume = vol;
-            oreAboard = ore;
 
             // ---- Power ------------------------------------------------------------
             double stored = 0, capacity = 0;
@@ -1792,19 +1801,36 @@ namespace VEIN
             hydrogenFill = tanks > 0 ? gas / tanks : 1.0;
         }
 
-        void AccumulateInventory(IMyInventory inv, ref double vol, ref double maxVol, ref double ore)
+        static void AccumulateVolume(IMyInventory inv, ref double vol, ref double maxVol)
         {
             if (inv == null) return;
             vol += (double)inv.CurrentVolume;
             maxVol += (double)inv.MaxVolume;
+        }
 
+        /// <summary>
+        /// Kilograms of valuable ore aboard. The expensive half of inventory sampling,
+        /// so it runs at about 1 Hz rather than every tick. Adaptive depth already
+        /// requires sixty dry ticks before it acts, so a second of lag changes nothing;
+        /// callers that need an exact figure at a shaft boundary call this directly.
+        /// </summary>
+        void SampleOre()
+        {
+            double ore = 0;
+            for (int i = 0; i < cargo.Count; i++)
+                AccumulateOre(cargo[i].GetInventory(0), ref ore);
+            for (int i = 0; i < drills.Count; i++)
+                AccumulateOre(drills[i].GetInventory(0), ref ore);
+            oreAboard = ore;
+        }
+
+        void AccumulateOre(IMyInventory inv, ref double ore)
+        {
+            if (inv == null) return;
             itemScratch.Clear();
             inv.GetItems(itemScratch);
             for (int i = 0; i < itemScratch.Count; i++)
-            {
-                MyInventoryItem it = itemScratch[i];
-                if (IsValuableOre(it.Type)) ore += (double)it.Amount;
-            }
+                if (IsValuableOre(itemScratch[i].Type)) ore += (double)itemScratch[i].Amount;
         }
 
         /// <summary>Ore that is worth carrying home. Stone is not.</summary>
@@ -2113,6 +2139,43 @@ namespace VEIN
 
             Log("Job " + job.Width + "x" + job.Height + " @" + job.Depth + "m, pitch "
                 + Fmt(job.Spacing, 1) + "m");
+        }
+
+        /// <summary>
+        /// Normalise and sanity-check a job frame that came from outside — restored
+        /// Storage or a dispatcher beacon. Truncated or corrupt data yields zero-length
+        /// or non-perpendicular axes, and nothing downstream checks: CellMouth collapses
+        /// every shaft onto the origin and Orient is handed a zero forward, so the ship
+        /// flies to one point and sits there with no indication why.
+        /// </summary>
+        /// <returns>False if the frame is unusable, in which case the job is cleared.</returns>
+        bool ValidateJobBasis()
+        {
+            if (job.Down.LengthSquared() < 1e-6 || job.Right.LengthSquared() < 1e-6
+                || job.Forward.LengthSquared() < 1e-6)
+            {
+                Log("Job frame is degenerate — clearing");
+                job.IsSet = false;
+                return false;
+            }
+
+            job.Down = Vector3D.Normalize(job.Down);
+            job.Right = Vector3D.Normalize(job.Right);
+            job.Forward = Vector3D.Normalize(job.Forward);
+
+            // Millimetre wire precision costs a little orthogonality; a badly skewed
+            // frame means the data is wrong, not merely rounded.
+            if (Math.Abs(Vector3D.Dot(job.Down, job.Right)) > 0.05
+                || Math.Abs(Vector3D.Dot(job.Down, job.Forward)) > 0.05
+                || Math.Abs(Vector3D.Dot(job.Right, job.Forward)) > 0.05)
+            {
+                Log("Job frame axes are not perpendicular — clearing");
+                job.IsSet = false;
+                return false;
+            }
+
+            if (job.Spacing < 0.1 || job.Spacing > 100) job.Spacing = derivedSpacing;
+            return true;
         }
 
         void RebuildCells()
@@ -2984,6 +3047,7 @@ namespace VEIN
         /// <summary>Set up the per-shaft counters and head for the hole.</summary>
         void BeginShaft()
         {
+            SampleOre();          // exact figure to measure this shaft's yield against
             shaftDepth = 0;
             shaftMaxDepth = 0;
             shaftStartOre = oreAboard;
@@ -3181,6 +3245,7 @@ namespace VEIN
         void FinishShaft()
         {
             ShaftResult result = pendingResult;
+            SampleOre();          // exact figure now the shaft is finished
             double ore = ShaftOreSoFar();
 
             // Yield is kilograms per metre *drilled*, so the vacuum we fell through to
@@ -3977,6 +4042,19 @@ namespace VEIN
         {
             if (role != Role.Miner) return;
 
+            // A second dispatcher on the same channel would otherwise steal the miner
+            // on every beacon, so leases come from one and reports go to whichever
+            // spoke last. Stay with the first one heard and say so.
+            if (dispatcherAddr != 0 && dispatcherAddr != src)
+            {
+                if (tick - lastDispatcherSeenTick < 600)
+                {
+                    Log("Second dispatcher on channel '" + igcChannel + "' — ignoring it");
+                    return;
+                }
+                Log("Switching dispatcher — previous one went quiet");
+            }
+
             dispatcherAddr = src;
             lastDispatcherSeenTick = tick;
 
@@ -3999,6 +4077,7 @@ namespace VEIN
             job.Forward = DecV(f[8]);
             job.Down = DecV(f[9]);
 
+            if (!ValidateJobBasis()) return;
             if (reshaped || cells.Length != job.CellCount) RebuildCells();
         }
 
@@ -4871,6 +4950,16 @@ namespace VEIN
                 return;
             }
 
+            // Anchoring uses the ship's live position and attitude. Doing that while the
+            // ship is nose-down inside a shaft would put the job plane underground and
+            // silently invalidate the whole survey, so it is refused unless parked.
+            if ((a[1] == "set" || a[1] == "here") && role == Role.Miner
+                && state != MinerState.Idle && state != MinerState.Fault && !Docked)
+            {
+                Log("Cannot anchor a job while flying — run 'stop' or 'halt' first");
+                return;
+            }
+
             switch (a[1])
             {
                 case "set":
@@ -5094,7 +5183,7 @@ namespace VEIN
             job.Forward = DecV(f[7]);
             job.Down = DecV(f[8]);
 
-            if (job.Spacing < 0.1) job.Spacing = 2.4;
+            if (!ValidateJobBasis()) return;
             RebuildCells();
         }
 
