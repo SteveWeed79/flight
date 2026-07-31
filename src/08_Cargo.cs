@@ -370,5 +370,14 @@ bool FuelCriticalForReturn()
 
 bool ServiceComplete()
 {
-    return batteryFill >= resumeBattery && hydrogenFill >= resumeHydrogen;
+    if (batteryFill < resumeBattery) return false;
+    if (hydrogenFill < resumeHydrogen) return false;
+
+    // Uranium too, because HasReservesForWork gates on it. Leaving without it
+    // means failing that check on the way out and turning straight back — an
+    // undock/dock loop that burns hydrogen and never reaches the rock. Better to
+    // wait at the connector where the uranium actually is.
+    if (reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium) return false;
+
+    return true;
 }

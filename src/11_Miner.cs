@@ -655,7 +655,13 @@ void StServicing(bool entry)
 
     if (!ServiceComplete())
     {
-        statusLine = "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
+        // Name uranium when it is the one holding us. A base with none to give
+        // holds the ship here indefinitely, and Servicing is exempt from the
+        // watchdog, so a wait that does not say why is indistinguishable from a
+        // hang. The other two always finish on their own.
+        statusLine = reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium
+            ? "Waiting for uranium " + Fmt(uraniumKg, 1) + "/" + Fmt(minUranium, 1) + "kg"
+            : "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
         return;
     }
 

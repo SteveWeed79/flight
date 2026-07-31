@@ -35,7 +35,6 @@ void SetJob(int width, int height, int depth)
     job.Down = Vector3D.Normalize(m.Forward);     // drills point forward
     job.Right = Vector3D.Normalize(m.Right);
     job.Forward = Vector3D.Normalize(m.Up);
-    job.Gravity = gravity;
     job.Width = Math.Max(1, width);
     job.Height = Math.Max(1, height);
     job.Depth = Math.Max(1, depth);

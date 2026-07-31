@@ -59,8 +59,6 @@ public class Job
     public Vector3D Right;
     public Vector3D Forward;
     public Vector3D Down;
-    /// <summary>Gravity at the job site, captured at set time.</summary>
-    public Vector3D Gravity;
 
     /// <summary>Shaft grid size.</summary>
     public int Width = 5;

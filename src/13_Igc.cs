@@ -182,9 +182,12 @@ string JobFrameFields()
 /// <returns>False if the frame was malformed, in which case the job is cleared.</returns>
 bool AdoptJobFrame(string[] f, int at)
 {
-    int w = ParseInt(f[at], job.Width);
-    int h = ParseInt(f[at + 1], job.Height);
-    int d = ParseInt(f[at + 2], job.Depth);
+    // Clamped, not merely defaulted. A malformed frame carrying a zero width
+    // would otherwise produce a job with no cells at all, which reads as a
+    // finished site rather than as the corruption it is.
+    int w = Math.Max(1, ParseInt(f[at], job.Width));
+    int h = Math.Max(1, ParseInt(f[at + 1], job.Height));
+    int d = Math.Max(1, ParseInt(f[at + 2], job.Depth));
 
     bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
 

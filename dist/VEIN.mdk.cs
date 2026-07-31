@@ -73,7 +73,7 @@ namespace VEIN
          *//////////////////////////////////////////////////////////////////////////////
 
         const string VEIN_VERSION = "1.1.0";
-        const string STORAGE_REV  = "3";   // bump on ANY change to a persisted enum or field order
+        const string STORAGE_REV  = "4";   // bump on ANY change to a persisted enum or field order
         #endregion
 
         #region 01_Enums.cs
@@ -247,8 +247,6 @@ namespace VEIN
             public Vector3D Right;
             public Vector3D Forward;
             public Vector3D Down;
-            /// <summary>Gravity at the job site, captured at set time.</summary>
-            public Vector3D Gravity;
 
             /// <summary>Shaft grid size.</summary>
             public int Width = 5;
@@ -2235,7 +2233,16 @@ namespace VEIN
 
         bool ServiceComplete()
         {
-            return batteryFill >= resumeBattery && hydrogenFill >= resumeHydrogen;
+            if (batteryFill < resumeBattery) return false;
+            if (hydrogenFill < resumeHydrogen) return false;
+
+            // Uranium too, because HasReservesForWork gates on it. Leaving without it
+            // means failing that check on the way out and turning straight back — an
+            // undock/dock loop that burns hydrogen and never reaches the rock. Better to
+            // wait at the connector where the uranium actually is.
+            if (reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium) return false;
+
+            return true;
         }
         #endregion
 
@@ -2277,7 +2284,6 @@ namespace VEIN
             job.Down = Vector3D.Normalize(m.Forward);     // drills point forward
             job.Right = Vector3D.Normalize(m.Right);
             job.Forward = Vector3D.Normalize(m.Up);
-            job.Gravity = gravity;
             job.Width = Math.Max(1, width);
             job.Height = Math.Max(1, height);
             job.Depth = Math.Max(1, depth);
@@ -3809,7 +3815,13 @@ namespace VEIN
 
             if (!ServiceComplete())
             {
-                statusLine = "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
+                // Name uranium when it is the one holding us. A base with none to give
+                // holds the ship here indefinitely, and Servicing is exempt from the
+                // watchdog, so a wait that does not say why is indistinguishable from a
+                // hang. The other two always finish on their own.
+                statusLine = reactors.Count > 0 && minUranium > 0 && uraniumKg < minUranium
+                    ? "Waiting for uranium " + Fmt(uraniumKg, 1) + "/" + Fmt(minUranium, 1) + "kg"
+                    : "Charging " + Fmt(batteryFill * 100, 0) + "% / H2 " + Fmt(hydrogenFill * 100, 0) + "%";
                 return;
             }
 
@@ -4421,9 +4433,12 @@ namespace VEIN
         /// <returns>False if the frame was malformed, in which case the job is cleared.</returns>
         bool AdoptJobFrame(string[] f, int at)
         {
-            int w = ParseInt(f[at], job.Width);
-            int h = ParseInt(f[at + 1], job.Height);
-            int d = ParseInt(f[at + 2], job.Depth);
+            // Clamped, not merely defaulted. A malformed frame carrying a zero width
+            // would otherwise produce a job with no cells at all, which reads as a
+            // finished site rather than as the corruption it is.
+            int w = Math.Max(1, ParseInt(f[at], job.Width));
+            int h = Math.Max(1, ParseInt(f[at + 1], job.Height));
+            int d = Math.Max(1, ParseInt(f[at + 2], job.Depth));
 
             bool reshaped = !job.IsSet || w != job.Width || h != job.Height;
 
@@ -5551,19 +5566,18 @@ namespace VEIN
             b.Append("A|").Append(EncD(learnedDrillSpeed))
              .Append('|').Append(EncD(brakeDerate))
              .Append('|').Append(brakeSamples)
+             // The burn rate, stored per KILOMETRE. EncD scales by 1000 and truncates to
+             // a long, and a rate is order 1e-5 of a tank per metre — per metre it would
+             // save as a flat zero every time. Zero doubles as "not yet calibrated",
+             // which it cannot be confused with: a measured rate is always positive.
+             .Append('|').Append(EncD(hydroCalibrated ? hydroPerMetre * 1000.0 : 0))
              .Append('\n');
 
             if (job.IsSet)
             {
-                b.Append("J|").Append(job.Width)
-                 .Append('|').Append(job.Height)
-                 .Append('|').Append(job.Depth)
-                 .Append('|').Append(EncD(job.Spacing))
-                 .Append('|').Append(EncV(job.Origin))
-                 .Append('|').Append(EncV(job.Right))
-                 .Append('|').Append(EncV(job.Forward))
-                 .Append('|').Append(EncV(job.Down))
-                 .Append('\n');
+                // Same eight fields, same order, same encoder as the IGC beacon. One
+                // layout with two writers is a layout that drifts.
+                b.Append("J").Append(JobFrameFields()).Append('\n');
             }
 
             // ---- Yield map ---------------------------------------------------------
@@ -5642,7 +5656,7 @@ namespace VEIN
                             break;
 
                         case "A":
-                            if (!versionOk || f.Length < 4) break;
+                            if (!versionOk || f.Length < 5) break;
                             LoadLearned(f);
                             break;
 
@@ -5716,22 +5730,21 @@ namespace VEIN
             if (cut > 0) learnedDrillSpeed = Clamp(cut, DrillSpeedFloor, DrillSpeedCap);
             if (derate > 0) brakeDerate = Clamp(derate, 0.30, 0.85);
             brakeSamples = Math.Max(0, ParseInt(f[3], 0));
+
+            // Back to per metre. Worth keeping across a recompile: it takes several
+            // 150-metre legs to measure, and until it is measured FuelToGetHome returns
+            // zero and the ship flies home with no fuel reserve check at all.
+            double perKm = DecD(f[4]);
+            if (perKm > 0) { hydroPerMetre = perKm / 1000.0; hydroCalibrated = true; }
         }
 
         void LoadJob(string[] f)
         {
-            job.IsSet = true;
-            job.Width = Math.Max(1, ParseInt(f[1], 5));
-            job.Height = Math.Max(1, ParseInt(f[2], 5));
-            job.Depth = Math.Max(1, ParseInt(f[3], 40));
-            job.Spacing = DecD(f[4]);
-            job.Origin = DecV(f[5]);
-            job.Right = DecV(f[6]);
-            job.Forward = DecV(f[7]);
-            job.Down = DecV(f[8]);
-
-            if (!ValidateJobBasis()) return;
-            RebuildCells();
+            // The shared decoder, at the same offset a job push uses. It validates the
+            // basis and rebuilds the cells for us: job.IsSet is false on a cold load, so
+            // its "reshaped" branch always fires — which the C record parsed after this
+            // one depends on, since it indexes into that array.
+            AdoptJobFrame(f, 1);
         }
 
         void LoadCells(string[] f)
