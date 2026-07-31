@@ -1369,6 +1369,23 @@ namespace VEIN
         //  drill jamming. Everything here is closed-loop on measured velocity.
         // ============================================================================
 
+        /// <summary>
+        /// Fraction of the theoretical stopping speed we are actually willing to use.
+        ///
+        /// sqrt(2·a·d) is exact for an ideal actuator and optimistic for a real one.
+        /// Thrusters ramp rather than snapping to full output, server tick rate varies,
+        /// ship mass changes while drilling, and the velocity controller has its own
+        /// response lag. All four eat into the distance available to stop in.
+        ///
+        /// PAM defaults to 0.70 for the same reason and its UI marks anything above
+        /// 0.80 as risky — a number arrived at by shipping to a great many players
+        /// rather than by derivation, which makes it worth respecting. VEIN is already
+        /// pessimistic in gravity, where it subtracts the full gravity magnitude from
+        /// available deceleration, but in space that subtraction is zero and this is the
+        /// only margin there is.
+        /// </summary>
+        const double BRAKE_DERATE = 0.75;
+
         /// <summary>Bucket every thruster by the ship-local direction it pushes.</summary>
         void BuildThrustModel()
         {
@@ -1505,7 +1522,7 @@ namespace VEIN
 
             // Speed we could still shed before arriving: v = sqrt(2 a d).
             double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-            double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget));
+            double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BRAKE_DERATE;
 
             double want = Math.Min(maxSpeed, arrivalSpeed);
             // Never command more than the server will honour anyway.
@@ -2153,6 +2170,12 @@ namespace VEIN
             for (int i = 0; i < cells.Length; i++) cells[i] = new YieldCell();
         }
 
+        /// <summary>Cells scored per selection pass. Bounds the cost so a small-grid
+        /// job with hundreds of cells cannot exceed the instruction limit.</summary>
+        const int SCORE_BUDGET = 48;
+        /// <summary>Rotating start point for the bounded scan.</summary>
+        int scoreCursor;
+
         int CellCol(int idx) { return idx % job.Width; }
         int CellRow(int idx) { return idx / job.Width; }
 
@@ -2255,18 +2278,37 @@ namespace VEIN
             int best = -1;
             double bestScore = double.MinValue;
 
-            for (int idx = 0; idx < cells.Length; idx++)
+            // Scoring every cell is O(cells x neighbourhood), which is fine on a
+            // large-grid job of 80 cells and fatal on a small-grid one. A small drill
+            // head cuts a ~1.1 m pitch, so a modest 20 x 20 m site is over 300 cells and
+            // a full sweep runs to six figures of instructions — well past the 50,000
+            // limit, and the block is killed for complexity.
+            //
+            // So: score the neighbourhood of the best cell we know about, then a bounded
+            // rotating window of everything else. The neighbourhood term is what
+            // preserves the important behaviour — following a vein once it is found —
+            // while the window keeps the cost flat regardless of job size.
+            int anchor = RichestCell();
+            if (anchor >= 0)
             {
-                if (!cells[idx].Available) continue;
+                int ac = CellCol(anchor), ar = CellRow(anchor);
+                for (int r = Math.Max(0, ar - 2); r <= Math.Min(job.Height - 1, ar + 2); r++)
+                    for (int c = Math.Max(0, ac - 2); c <= Math.Min(job.Width - 1, ac + 2); c++)
+                        Consider(job.IndexOf(c, r), ref best, ref bestScore);
+            }
 
-                double score = ScoreCell(idx);
-                // A cell we have already judged barren from its own probe is only worth
-                // revisiting if its neighbours turned out rich.
-                if (cells[idx].State == CellState.Barren && score < barrenThreshold) continue;
-                if (score < bestScore) continue;
+            int window = Math.Min(SCORE_BUDGET, cells.Length);
+            for (int k = 0; k < window; k++)
+                Consider((scoreCursor + k) % cells.Length, ref best, ref bestScore);
+            scoreCursor = (scoreCursor + window) % Math.Max(1, cells.Length);
 
-                bestScore = score;
-                best = idx;
+            // Nothing scored well in this window, but work remains somewhere. Take the
+            // first available cell rather than reporting the job finished — a bounded
+            // scan must never be able to end a job early.
+            if (best < 0 && RemainingCellCount() > 0)
+            {
+                for (int i = 0; i < cells.Length; i++)
+                    if (cells[i].Available) return i;
             }
 
             // Everything left is written off as barren. That is a finished job, not a
@@ -2274,15 +2316,65 @@ namespace VEIN
             return best;
         }
 
+        /// <summary>Fold one candidate into the running best, if it qualifies.</summary>
+        void Consider(int idx, ref int best, ref double bestScore)
+        {
+            if (idx < 0 || idx >= cells.Length) return;
+            if (!cells[idx].Available) return;
+
+            double score = ScoreCell(idx);
+            // A cell already judged barren from its own probe is only worth revisiting
+            // if its neighbours turned out rich.
+            if (cells[idx].State == CellState.Barren && score < barrenThreshold) return;
+            if (score < bestScore) return;
+
+            bestScore = score;
+            best = idx;
+        }
+
+        /// <summary>Highest-yielding cell found so far, or -1. Deliberately cheap — a
+        /// field compare per cell, no neighbourhood maths.</summary>
+        int RichestCell()
+        {
+            int best = -1;
+            float bestYield = 0f;
+            for (int i = 0; i < cells.Length; i++)
+            {
+                if (cells[i].MetresDrilled < 0.5f) continue;
+                if (cells[i].Yield <= bestYield) continue;
+                bestYield = cells[i].Yield;
+                best = i;
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Lattice coarseness in cells, derived so probes land a sensible distance
+        /// apart in *metres* whatever the drill head is doing.
+        ///
+        /// probeStride is configured in cells, but cell size is set by the drill's cut
+        /// radius — 3.2 m on a large-grid head, 1.1 m on a small one. Probing every
+        /// second cell means a test shaft every 6 m on the former and every 2 m on the
+        /// latter, which is far more survey than the ground warrants. The configured
+        /// value acts as a floor; this raises it when cells are fine.
+        /// </summary>
+        int EffectiveProbeStride()
+        {
+            const double TARGET_SPACING_M = 8.0;
+            int byDistance = (int)Math.Round(TARGET_SPACING_M / Math.Max(0.5, job.Spacing));
+            return Math.Max(1, Math.Max(probeStride, byDistance));
+        }
+
         /// <summary>Next un-probed lattice point, nearest to the ship first.</summary>
         int NextProbeCell()
         {
             int best = -1;
             double bestDist = double.MaxValue;
+            int stride = EffectiveProbeStride();
 
-            for (int row = 0; row < job.Height; row += probeStride)
+            for (int row = 0; row < job.Height; row += stride)
             {
-                for (int col = 0; col < job.Width; col += probeStride)
+                for (int col = 0; col < job.Width; col += stride)
                 {
                     int idx = job.IndexOf(col, row);
                     if (cells[idx].State != CellState.Unknown) continue;
@@ -2310,7 +2402,7 @@ namespace VEIN
         {
             int col = CellCol(idx), row = CellRow(idx);
 
-            const int RADIUS = 3;       // cells; keeps this O(49) instead of O(n)
+            const int RADIUS = 2;       // 5x5 neighbourhood; O(25), not O(n)
             double weighted = 0, weight = 0;
 
             int c0 = Math.Max(0, col - RADIUS), c1 = Math.Min(job.Width - 1, col + RADIUS);

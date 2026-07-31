@@ -7,6 +7,23 @@
 //  drill jamming. Everything here is closed-loop on measured velocity.
 // ============================================================================
 
+/// <summary>
+/// Fraction of the theoretical stopping speed we are actually willing to use.
+///
+/// sqrt(2·a·d) is exact for an ideal actuator and optimistic for a real one.
+/// Thrusters ramp rather than snapping to full output, server tick rate varies,
+/// ship mass changes while drilling, and the velocity controller has its own
+/// response lag. All four eat into the distance available to stop in.
+///
+/// PAM defaults to 0.70 for the same reason and its UI marks anything above
+/// 0.80 as risky — a number arrived at by shipping to a great many players
+/// rather than by derivation, which makes it worth respecting. VEIN is already
+/// pessimistic in gravity, where it subtracts the full gravity magnitude from
+/// available deceleration, but in space that subtraction is zero and this is the
+/// only margin there is.
+/// </summary>
+const double BRAKE_DERATE = 0.75;
+
 /// <summary>Bucket every thruster by the ship-local direction it pushes.</summary>
 void BuildThrustModel()
 {
@@ -143,7 +160,7 @@ void FlyTo(Vector3D target, double maxSpeed)
 
     // Speed we could still shed before arriving: v = sqrt(2 a d).
     double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget));
+    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BRAKE_DERATE;
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
     // Never command more than the server will honour anyway.
