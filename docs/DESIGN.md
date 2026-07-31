@@ -55,8 +55,22 @@ The parts worth stealing:
 - **Dispatcher and drones.** A base brain owns the work; drones own nothing but
   their current task. Drones become disposable, which is the correct property for
   something you are flying into rock.
-- **Real concurrency on one deposit.** Many drones mine the same site at once,
-  with exclusive claims on shared path segments so they do not collide.
+- **Real concurrency on one deposit,** via a named-section mutex. This is worth
+  spelling out, because it is better than what VEIN does. Drones ask the
+  dispatcher for a named lock over IGC:
+
+  ```
+  common-airspace-ask-for-lock:<section>     agent -> dispatcher
+  common-airspace-lock-granted:<section>     dispatcher -> agent
+  common-airspace-lock-released:<section>    agent -> dispatcher
+  ```
+
+  The dispatcher grants the section if nobody holds it, and otherwise puts the
+  asker on a **FIFO queue** for it; on release it dequeues the next drone and
+  grants immediately. A drone with no lock sits in an explicit
+  `WaitingForLockInShaft` state rather than improvising. `WholeAirspaceLocking`
+  toggles between locking one shared section and locking everything, and there
+  is a manual purge command for when it deadlocks anyway.
 - **Adaptive depth from ore income.** If the drills stop producing, stop digging.
   This is the single highest-value behaviour in any mining script and it needs no
   special blocks at all.
@@ -126,9 +140,18 @@ SCAM's dispatcher model is right. VEIN tightens the failure handling:
 - **Drones are presumed dead on silence,** and everything they held — shaft,
   dock slot — is reclaimed.
 - **Altitude lanes.** Each drone gets its own height band over the site, so two
-  drones crossing never share an altitude. Cheap, and it removes the entire class
-  of mid-air collisions swarm scripts are known for. Lanes repack when a drone
-  leaves, so three drones use lanes 0/1/2 rather than 0/3/7.
+  drones crossing never share an altitude. Lanes repack when a drone leaves, so
+  three drones use 0/1/2 rather than 0/3/7.
+
+  **This is weaker than SCAM's answer and should eventually be replaced by it.**
+  Lanes stop two drones sharing a height; they do not stop two drones wanting
+  the same place at the same height, and they scale badly — N drones need N
+  distinct altitudes, which becomes absurd past a handful. A named-section mutex
+  with a wait queue costs no altitude at all and actually guarantees exclusion.
+  SCAM keeps an echelon offset *as well as* locks, at exactly the same 12 m VEIN
+  arrived at independently, which suggests lanes are a reasonable formation
+  device and a poor exclusion mechanism — which is precisely how they are being
+  misused here.
 - **Work goes to the nearest drone.** The dispatcher scores the site from the
   requesting drone's position, not from the base.
 - **Stale reports are rejected.** Only the drone currently holding a lease may

@@ -15,14 +15,17 @@
 /// ship mass changes while drilling, and the velocity controller has its own
 /// response lag. All four eat into the distance available to stop in.
 ///
-/// PAM defaults to 0.70 for the same reason and its UI marks anything above
-/// 0.80 as risky — a number arrived at by shipping to a great many players
-/// rather than by derivation, which makes it worth respecting. VEIN is already
+/// Two independently shipped miners agree this must be well under 1.0, and both
+/// land lower than seemed necessary from first principles: PAM defaults to 0.70
+/// and marks anything above 0.80 as risky in its own UI, while SCAM ships a
+/// StoppingPowerQuotient of 0.50. Neither number is derived; both come from
+/// watching real ships overshoot. VEIN sat at 0.75 — more aggressive than
+/// either — purely because nothing had contradicted it yet. VEIN is already
 /// pessimistic in gravity, where it subtracts the full gravity magnitude from
 /// available deceleration, but in space that subtraction is zero and this is the
 /// only margin there is.
 /// </summary>
-const double BRAKE_DERATE = 0.75;
+const double BRAKE_DERATE = 0.60;
 
 /// <summary>Bucket every thruster by the ship-local direction it pushes.</summary>
 void BuildThrustModel()

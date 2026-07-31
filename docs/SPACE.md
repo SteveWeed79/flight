@@ -22,7 +22,7 @@ depthMode=AutoOre
 holeOrder=Prospect
 eject=Stone
 shaftOverlap=0.15
-drillSpeed=1.8
+drillSpeed=1.0
 retreatSpeed=6.0
 cruiseSpeed=95
 dockSpeed=2.0
@@ -39,7 +39,7 @@ oreScanRange=800
 [vein.safety]
 minBattery=0.25
 minHydrogen=0.20
-resumeBattery=0.95
+resumeBattery=0.80
 resumeHydrogen=0.90
 liftSafetyFactor=1.0
 transitAltitude=15
@@ -62,7 +62,7 @@ verboseEcho=true
 |---|---|---|---|
 | `cruiseSpeed` | 40 | **95** | No gravity to fight and nothing to fly into. The real cap is the server's 100 m/s limit; the controller still only commands what it can stop from. |
 | `retreatSpeed` | 3.0 | **6.0** | Climbing out of a shaft costs nothing without gravity. |
-| `drillSpeed` | 1.2 | **1.8** | Station-keeping is free in zero-g, so more of the thrust budget goes into cutting. Drop it if the ship jams. |
+| `drillSpeed` | 0.8 | **1.0** | Station-keeping is free in zero-g, so a little more of the thrust budget can go into cutting. Only a little: SCAM ships 0.6 and PAM warns that above ~2 the drills stop keeping up. Drop it at the first sign of jamming. |
 | `cargoFullAt` | 0.92 | **0.96** | No lift limit means you can fill right up. On a planet the margin exists because a full hold might not climb out. |
 | `liftSafetyFactor` | 0.80 | **1.0** | Inert. There is no lift survey to apply it to. |
 | `transitAltitude` | 25 | **15** | Standoff from the rock face rather than terrain clearance. Keep it above your ship's longest dimension. |
@@ -161,7 +161,7 @@ space and very much do here:
 depthMode=AutoOre
 holeOrder=Prospect
 eject=Stone
-drillSpeed=1.5
+drillSpeed=0.9
 retreatSpeed=5.0
 cruiseSpeed=80
 dockSpeed=1.5

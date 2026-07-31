@@ -365,7 +365,7 @@ EjectMode ejectMode = EjectMode.Stone;
 /// <summary>Fraction of drill radius that adjacent shafts overlap. 0.15 = 15% overlap.</summary>
 double shaftOverlap = 0.15;
 /// <summary>m/s while drilling downward. Slow is fast — outrunning the drills just jams you.</summary>
-double drillSpeed = 1.2;
+double drillSpeed = 0.8;
 /// <summary>m/s while backing out of a shaft.</summary>
 double retreatSpeed = 3.0;
 /// <summary>m/s in open space along the recorded path.</summary>
@@ -398,7 +398,7 @@ double minHydrogen = 0.25;
 /// Ignored entirely on a ship with no reactors.</summary>
 double minUranium = 2.0;
 /// <summary>Resume work above this battery fraction.</summary>
-double resumeBattery = 0.95;
+double resumeBattery = 0.80;
 /// <summary>Resume work above this hydrogen fraction.</summary>
 double resumeHydrogen = 0.90;
 /// <summary>Fraction of available lift we are willing to use. Headroom for gusts and mistakes.</summary>
@@ -465,7 +465,7 @@ void LoadConfig()
     holeOrder = ParseHoleOrder(ini.Get(S_MINE, "holeOrder").ToString("Prospect"));
     ejectMode = ParseEjectMode(ini.Get(S_MINE, "eject").ToString("Stone"));
     shaftOverlap  = Clamp(ini.Get(S_MINE, "shaftOverlap").ToDouble(0.15), 0.0, 0.75);
-    drillSpeed    = Clamp(ini.Get(S_MINE, "drillSpeed").ToDouble(1.2), 0.05, 10.0);
+    drillSpeed    = Clamp(ini.Get(S_MINE, "drillSpeed").ToDouble(0.8), 0.05, 10.0);
     retreatSpeed  = Clamp(ini.Get(S_MINE, "retreatSpeed").ToDouble(3.0), 0.2, 20.0);
     cruiseSpeed   = Clamp(ini.Get(S_MINE, "cruiseSpeed").ToDouble(40.0), 1.0, 300.0);
     dockSpeed     = Clamp(ini.Get(S_MINE, "dockSpeed").ToDouble(0.8), 0.2, 10.0);
@@ -481,7 +481,7 @@ void LoadConfig()
     minBattery    = Clamp(ini.Get(S_SAFE, "minBattery").ToDouble(0.30), 0.05, 0.95);
     minHydrogen   = Clamp(ini.Get(S_SAFE, "minHydrogen").ToDouble(0.25), 0.0, 0.95);
     minUranium    = Math.Max(0.0, ini.Get(S_SAFE, "minUranium").ToDouble(2.0));
-    resumeBattery = Clamp(ini.Get(S_SAFE, "resumeBattery").ToDouble(0.95), 0.1, 1.0);
+    resumeBattery = Clamp(ini.Get(S_SAFE, "resumeBattery").ToDouble(0.80), 0.1, 1.0);
     resumeHydrogen = Clamp(ini.Get(S_SAFE, "resumeHydrogen").ToDouble(0.90), 0.0, 1.0);
     liftSafetyFactor = Clamp(ini.Get(S_SAFE, "liftSafetyFactor").ToDouble(0.80), 0.2, 1.0);
     transitAltitude = Clamp(ini.Get(S_SAFE, "transitAltitude").ToDouble(25.0), 2.0, 500.0);
@@ -525,7 +525,7 @@ void WriteConfig()
     ini.Set(S_MINE, "shaftOverlap", shaftOverlap);
     ini.SetComment(S_MINE, "shaftOverlap", "0.15 = shafts overlap 15%. Higher clears more rock, digs more holes.");
     ini.Set(S_MINE, "drillSpeed", drillSpeed);
-    ini.SetComment(S_MINE, "drillSpeed", "m/s downward while cutting. Above ~2 m/s drills stop keeping up\nand you jam. Lower it on a light ship.");
+    ini.SetComment(S_MINE, "drillSpeed", "m/s downward while cutting. SCAM ships 0.6 and PAM warns that\nabove ~2 the drills stop keeping up and you jam. Slow is fast here:\ntime lost to a wedged ship dwarfs time saved cutting quickly.");
     ini.Set(S_MINE, "retreatSpeed", retreatSpeed);
     ini.Set(S_MINE, "cruiseSpeed", cruiseSpeed);
     ini.SetComment(S_MINE, "cruiseSpeed", "Ceiling only. Real speed is capped by whatever the ship can\nactually stop from, given its mass and the local gravity.");
@@ -549,6 +549,7 @@ void WriteConfig()
     ini.Set(S_SAFE, "minUranium", minUranium);
     ini.SetComment(S_SAFE, "minUranium", "Kilograms across all reactors. Ignored if the ship has none.\n0 disables the check.");
     ini.Set(S_SAFE, "resumeBattery", resumeBattery);
+    ini.SetComment(S_SAFE, "resumeBattery", "Charge level at which work resumes. SCAM uses 0.8 — the last\nfifth of a charge takes disproportionately long and buys little.");
     ini.Set(S_SAFE, "resumeHydrogen", resumeHydrogen);
     ini.Set(S_SAFE, "liftSafetyFactor", liftSafetyFactor);
     ini.SetComment(S_SAFE, "liftSafetyFactor", "Fraction of measured lift we will spend. 0.8 leaves 20% in hand\nfor a heavy load and a bad angle.");
@@ -1355,14 +1356,17 @@ int DamagedBlockCount()
 /// ship mass changes while drilling, and the velocity controller has its own
 /// response lag. All four eat into the distance available to stop in.
 ///
-/// PAM defaults to 0.70 for the same reason and its UI marks anything above
-/// 0.80 as risky — a number arrived at by shipping to a great many players
-/// rather than by derivation, which makes it worth respecting. VEIN is already
+/// Two independently shipped miners agree this must be well under 1.0, and both
+/// land lower than seemed necessary from first principles: PAM defaults to 0.70
+/// and marks anything above 0.80 as risky in its own UI, while SCAM ships a
+/// StoppingPowerQuotient of 0.50. Neither number is derived; both come from
+/// watching real ships overshoot. VEIN sat at 0.75 — more aggressive than
+/// either — purely because nothing had contradicted it yet. VEIN is already
 /// pessimistic in gravity, where it subtracts the full gravity magnitude from
 /// available deceleration, but in space that subtraction is zero and this is the
 /// only margin there is.
 /// </summary>
-const double BRAKE_DERATE = 0.75;
+const double BRAKE_DERATE = 0.60;
 
 /// <summary>Bucket every thruster by the ship-local direction it pushes.</summary>
 void BuildThrustModel()
