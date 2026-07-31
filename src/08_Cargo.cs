@@ -173,25 +173,6 @@ bool IsWaste(MyItemType t)
     return false;
 }
 
-/// <summary>Is there enough waste aboard to be worth stopping to dump?</summary>
-bool WorthEjecting()
-{
-    if (ejectMode == EjectMode.Off || ejectors.Count == 0) return false;
-
-    double waste = 0;
-    for (int i = 0; i < cargo.Count; i++)
-    {
-        IMyInventory inv = cargo[i].GetInventory(0);
-        if (inv == null) continue;
-        itemScratch.Clear();
-        inv.GetItems(itemScratch);
-        for (int k = 0; k < itemScratch.Count; k++)
-            if (IsWaste(itemScratch[k].Type)) waste += (double)itemScratch[k].Amount;
-    }
-    // Below a few hundred kg the round trip through the ejector costs more time
-    // than the space is worth.
-    return waste > 500;
-}
 
 // ---------------------------------------------------------------------------
 //  UNLOADING AT BASE

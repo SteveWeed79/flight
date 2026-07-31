@@ -16,6 +16,14 @@ void TickMiner()
     CheckDamage();
     Watchdog();
     UpdateOreScan();
+    EjectWhileFlying();
+
+    // Belt and braces: if we are off the connector, the thrusters are on. Full
+    // stop. Something else — an Event Controller, a timer, a player — is free to
+    // switch them off while docked to save power, but the moment we are flying
+    // this is not negotiable. Cheap, because it only writes on a change.
+    if (!Docked && state != MinerState.Idle && state != MinerState.Fault)
+        SetThrusters(true);
 
     bool entry = stateEntry;
     stateEntry = false;
@@ -29,7 +37,6 @@ void TickMiner()
         case MinerState.Approaching: StApproaching(entry); break;
         case MinerState.Descending:  StDescending(entry); break;
         case MinerState.Ascending:   StAscending(entry); break;
-        case MinerState.Ejecting:    StEjecting(entry); break;
         case MinerState.Inbound:     StInbound(entry); break;
         case MinerState.Docking:     StDocking(entry); break;
         case MinerState.Unloading:   StUnloading(entry); break;
@@ -65,6 +72,11 @@ void StUndocking(bool entry)
     if (entry)
     {
         statusLine = "Undocking";
+        // Thrusters first, before anything else, and before we let go of the
+        // connector. Plenty of people switch thrusters off while docked — by
+        // hand or with an Event Controller — to save power. Undocking into
+        // gravity with them still off is a long fall.
+        SetThrusters(true);
         SetBatteryCharging(false);
         SetTanksFilling(false);       // stop hoarding, we need the gas now
         if (Docked) dockConnector.Disconnect();
@@ -372,8 +384,6 @@ void FinishShaft()
         SetState(MinerState.Inbound);
         return;
     }
-    if (WorthEjecting()) { SetState(MinerState.Ejecting); return; }
-
     SetState(MinerState.Selecting);
 }
 
@@ -386,20 +396,31 @@ void AbandonShaft(ShaftResult why)
 
 // ---------------------------------------------------------------------------
 
-void StEjecting(bool entry)
+/// <summary>
+/// Push waste into the ejectors continuously, while flying, whenever we are not
+/// docked.
+///
+/// This replaces a dedicated "stop and dump" state. Stopping to throw stone
+/// overboard costs time for something that happens perfectly well in transit —
+/// the ejectors drain on their own clock either way. Credit where due: this is
+/// the pattern experienced players already build by hand with an Event
+/// Controller wired to "not docked", and it is plainly better than what the
+/// script was doing.
+/// </summary>
+void EjectWhileFlying()
 {
-    if (entry) { statusLine = "Dumping stone"; SetDrills(false); }
+    if (ejectMode == EjectMode.Off || ejectors.Count == 0) return;
+    if (Docked) return;
 
-    // Hold station clear of the hole while the ejectors run.
-    if (activeCell >= 0)
-        FlyTo(ControllerTargetFor(job.CellMouth(CellCol(activeCell), CellRow(activeCell),
-              transitAltitude + myLane)), cruiseSpeed * 0.3);
-    else
-        SetVelocity(Vector3D.Zero);
+    // Not while cutting. Ejected stone becomes floating objects, and spraying
+    // them into a shaft you are currently inside is asking for a collision.
+    if (state == MinerState.Descending || state == MinerState.Ascending) return;
 
-    Orient(job.Down, job.Forward);
+    // Cheap most ticks: only actually moves items every so often.
+    if (tick % 20 != 0) return;
+    if (BudgetTight(0.6)) return;
 
-    if (EjectWaste()) SetState(MinerState.Selecting);
+    EjectWaste();
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +506,16 @@ void StUnloading(bool entry)
 
 void StServicing(bool entry)
 {
-    if (entry) { statusLine = "Charging"; SetBatteryCharging(true); SetTanksFilling(true); }
+    if (entry)
+    {
+        statusLine = "Charging";
+        SetBatteryCharging(true);
+        SetTanksFilling(true);
+        // Parked and connected — the thrusters are dead weight drawing power
+        // that we are trying to put back into the batteries. Undocking turns
+        // them on again, and the guard in TickMiner catches every other route.
+        SetThrusters(false);
+    }
 
     if (!Docked) { SetState(MinerState.Docking); return; }
 

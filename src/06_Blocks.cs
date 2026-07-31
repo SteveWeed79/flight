@@ -203,8 +203,16 @@ Health CheckReadiness()
     if (!job.IsSet) return Health.Bad("No job set — use: job set <w> <h> <depth>");
     if (path.Count == 0 && !homeDockSet) return Health.Bad("No path recorded — use: record start/stop");
 
-    int liveThrust = 0;
-    for (int i = 0; i < thrusters.Count; i++) if (thrusters[i].IsFunctional) liveThrust++;
+    // Functional AND enabled. Checking only IsFunctional passes a ship whose
+    // thrusters are all switched off, which then reports zero thrust capacity
+    // and sits there — or falls — until the watchdog eventually notices.
+    int liveThrust = 0, offThrust = 0;
+    for (int i = 0; i < thrusters.Count; i++)
+    {
+        if (!thrusters[i].IsFunctional) continue;
+        if (thrusters[i].Enabled) liveThrust++; else offThrust++;
+    }
+    if (liveThrust == 0 && offThrust > 0) return Health.Bad("All thrusters switched off");
     if (liveThrust == 0) return Health.Bad("All thrusters damaged");
 
     int liveGyros = 0;

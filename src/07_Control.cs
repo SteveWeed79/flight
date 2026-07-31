@@ -343,6 +343,20 @@ void SetDrills(bool on)
         if (drills[i].Enabled != on) drills[i].Enabled = on;
 }
 
+/// <summary>
+/// Switch the thrusters on or off as blocks.
+///
+/// Note this is Enabled, not the override — a disabled thruster contributes
+/// nothing to <see cref="RefreshThrustCapacity"/>, so the flight controller
+/// computes zero available thrust and the ship simply does not move. Always
+/// call this with true before attempting to fly.
+/// </summary>
+void SetThrusters(bool on)
+{
+    for (int i = 0; i < thrusters.Count; i++)
+        if (thrusters[i].Enabled != on) thrusters[i].Enabled = on;
+}
+
 // ---------------------------------------------------------------------------
 //  SAMPLING
 // ---------------------------------------------------------------------------

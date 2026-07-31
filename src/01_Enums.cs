@@ -28,8 +28,6 @@ public enum MinerState
     Descending,
     /// <summary>Backing out of the shaft.</summary>
     Ascending,
-    /// <summary>Dumping stone/ice to buy more shaft time.</summary>
-    Ejecting,
     /// <summary>Flying the recorded path inbound, job -> dock.</summary>
     Inbound,
     /// <summary>Lining up on the dock connector.</summary>

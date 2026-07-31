@@ -107,8 +107,6 @@ namespace VEIN
             Descending,
             /// <summary>Backing out of the shaft.</summary>
             Ascending,
-            /// <summary>Dumping stone/ice to buy more shaft time.</summary>
-            Ejecting,
             /// <summary>Flying the recorded path inbound, job -> dock.</summary>
             Inbound,
             /// <summary>Lining up on the dock connector.</summary>
@@ -1283,8 +1281,16 @@ namespace VEIN
             if (!job.IsSet) return Health.Bad("No job set — use: job set <w> <h> <depth>");
             if (path.Count == 0 && !homeDockSet) return Health.Bad("No path recorded — use: record start/stop");
 
-            int liveThrust = 0;
-            for (int i = 0; i < thrusters.Count; i++) if (thrusters[i].IsFunctional) liveThrust++;
+            // Functional AND enabled. Checking only IsFunctional passes a ship whose
+            // thrusters are all switched off, which then reports zero thrust capacity
+            // and sits there — or falls — until the watchdog eventually notices.
+            int liveThrust = 0, offThrust = 0;
+            for (int i = 0; i < thrusters.Count; i++)
+            {
+                if (!thrusters[i].IsFunctional) continue;
+                if (thrusters[i].Enabled) liveThrust++; else offThrust++;
+            }
+            if (liveThrust == 0 && offThrust > 0) return Health.Bad("All thrusters switched off");
             if (liveThrust == 0) return Health.Bad("All thrusters damaged");
 
             int liveGyros = 0;
@@ -1657,6 +1663,20 @@ namespace VEIN
                 if (drills[i].Enabled != on) drills[i].Enabled = on;
         }
 
+        /// <summary>
+        /// Switch the thrusters on or off as blocks.
+        ///
+        /// Note this is Enabled, not the override — a disabled thruster contributes
+        /// nothing to <see cref="RefreshThrustCapacity"/>, so the flight controller
+        /// computes zero available thrust and the ship simply does not move. Always
+        /// call this with true before attempting to fly.
+        /// </summary>
+        void SetThrusters(bool on)
+        {
+            for (int i = 0; i < thrusters.Count; i++)
+                if (thrusters[i].Enabled != on) thrusters[i].Enabled = on;
+        }
+
         // ---------------------------------------------------------------------------
         //  SAMPLING
         // ---------------------------------------------------------------------------
@@ -1866,25 +1886,6 @@ namespace VEIN
             return false;
         }
 
-        /// <summary>Is there enough waste aboard to be worth stopping to dump?</summary>
-        bool WorthEjecting()
-        {
-            if (ejectMode == EjectMode.Off || ejectors.Count == 0) return false;
-
-            double waste = 0;
-            for (int i = 0; i < cargo.Count; i++)
-            {
-                IMyInventory inv = cargo[i].GetInventory(0);
-                if (inv == null) continue;
-                itemScratch.Clear();
-                inv.GetItems(itemScratch);
-                for (int k = 0; k < itemScratch.Count; k++)
-                    if (IsWaste(itemScratch[k].Type)) waste += (double)itemScratch[k].Amount;
-            }
-            // Below a few hundred kg the round trip through the ejector costs more time
-            // than the space is worth.
-            return waste > 500;
-        }
 
         // ---------------------------------------------------------------------------
         //  UNLOADING AT BASE
@@ -2643,6 +2644,14 @@ namespace VEIN
             CheckDamage();
             Watchdog();
             UpdateOreScan();
+            EjectWhileFlying();
+
+            // Belt and braces: if we are off the connector, the thrusters are on. Full
+            // stop. Something else — an Event Controller, a timer, a player — is free to
+            // switch them off while docked to save power, but the moment we are flying
+            // this is not negotiable. Cheap, because it only writes on a change.
+            if (!Docked && state != MinerState.Idle && state != MinerState.Fault)
+                SetThrusters(true);
 
             bool entry = stateEntry;
             stateEntry = false;
@@ -2656,7 +2665,6 @@ namespace VEIN
                 case MinerState.Approaching: StApproaching(entry); break;
                 case MinerState.Descending:  StDescending(entry); break;
                 case MinerState.Ascending:   StAscending(entry); break;
-                case MinerState.Ejecting:    StEjecting(entry); break;
                 case MinerState.Inbound:     StInbound(entry); break;
                 case MinerState.Docking:     StDocking(entry); break;
                 case MinerState.Unloading:   StUnloading(entry); break;
@@ -2692,6 +2700,11 @@ namespace VEIN
             if (entry)
             {
                 statusLine = "Undocking";
+                // Thrusters first, before anything else, and before we let go of the
+                // connector. Plenty of people switch thrusters off while docked — by
+                // hand or with an Event Controller — to save power. Undocking into
+                // gravity with them still off is a long fall.
+                SetThrusters(true);
                 SetBatteryCharging(false);
                 SetTanksFilling(false);       // stop hoarding, we need the gas now
                 if (Docked) dockConnector.Disconnect();
@@ -2999,8 +3012,6 @@ namespace VEIN
                 SetState(MinerState.Inbound);
                 return;
             }
-            if (WorthEjecting()) { SetState(MinerState.Ejecting); return; }
-
             SetState(MinerState.Selecting);
         }
 
@@ -3013,20 +3024,31 @@ namespace VEIN
 
         // ---------------------------------------------------------------------------
 
-        void StEjecting(bool entry)
+        /// <summary>
+        /// Push waste into the ejectors continuously, while flying, whenever we are not
+        /// docked.
+        ///
+        /// This replaces a dedicated "stop and dump" state. Stopping to throw stone
+        /// overboard costs time for something that happens perfectly well in transit —
+        /// the ejectors drain on their own clock either way. Credit where due: this is
+        /// the pattern experienced players already build by hand with an Event
+        /// Controller wired to "not docked", and it is plainly better than what the
+        /// script was doing.
+        /// </summary>
+        void EjectWhileFlying()
         {
-            if (entry) { statusLine = "Dumping stone"; SetDrills(false); }
+            if (ejectMode == EjectMode.Off || ejectors.Count == 0) return;
+            if (Docked) return;
 
-            // Hold station clear of the hole while the ejectors run.
-            if (activeCell >= 0)
-                FlyTo(ControllerTargetFor(job.CellMouth(CellCol(activeCell), CellRow(activeCell),
-                      transitAltitude + myLane)), cruiseSpeed * 0.3);
-            else
-                SetVelocity(Vector3D.Zero);
+            // Not while cutting. Ejected stone becomes floating objects, and spraying
+            // them into a shaft you are currently inside is asking for a collision.
+            if (state == MinerState.Descending || state == MinerState.Ascending) return;
 
-            Orient(job.Down, job.Forward);
+            // Cheap most ticks: only actually moves items every so often.
+            if (tick % 20 != 0) return;
+            if (BudgetTight(0.6)) return;
 
-            if (EjectWaste()) SetState(MinerState.Selecting);
+            EjectWaste();
         }
 
         // ---------------------------------------------------------------------------
@@ -3112,7 +3134,16 @@ namespace VEIN
 
         void StServicing(bool entry)
         {
-            if (entry) { statusLine = "Charging"; SetBatteryCharging(true); SetTanksFilling(true); }
+            if (entry)
+            {
+                statusLine = "Charging";
+                SetBatteryCharging(true);
+                SetTanksFilling(true);
+                // Parked and connected — the thrusters are dead weight drawing power
+                // that we are trying to put back into the batteries. Undocking turns
+                // them on again, and the guard in TickMiner catches every other route.
+                SetThrusters(false);
+            }
 
             if (!Docked) { SetState(MinerState.Docking); return; }
 

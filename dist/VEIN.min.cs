@@ -17,7 +17,6 @@ Selecting,
 Approaching,
 Descending,
 Ascending,
-Ejecting,
 Inbound,
 Docking,
 Unloading,
@@ -701,8 +700,13 @@ if (drills.Count == 0) return Health.Bad("No drills");
 if (dockConnector == null) return Health.Bad("No connector");
 if (!job.IsSet) return Health.Bad("No job set — use: job set <w> <h> <depth>");
 if (path.Count == 0 && !homeDockSet) return Health.Bad("No path recorded — use: record start/stop");
-int liveThrust = 0;
-for (int i = 0; i < thrusters.Count; i++) if (thrusters[i].IsFunctional) liveThrust++;
+int liveThrust = 0, offThrust = 0;
+for (int i = 0; i < thrusters.Count; i++)
+{
+if (!thrusters[i].IsFunctional) continue;
+if (thrusters[i].Enabled) liveThrust++; else offThrust++;
+}
+if (liveThrust == 0 && offThrust > 0) return Health.Bad("All thrusters switched off");
 if (liveThrust == 0) return Health.Bad("All thrusters damaged");
 int liveGyros = 0;
 for (int i = 0; i < gyros.Count; i++) if (gyros[i].IsFunctional) liveGyros++;
@@ -926,6 +930,11 @@ void SetDrills(bool on)
 for (int i = 0; i < drills.Count; i++)
 if (drills[i].Enabled != on) drills[i].Enabled = on;
 }
+void SetThrusters(bool on)
+{
+for (int i = 0; i < thrusters.Count; i++)
+if (thrusters[i].Enabled != on) thrusters[i].Enabled = on;
+}
 void SampleShip()
 {
 if (controller == null) return;
@@ -1066,21 +1075,6 @@ if (t.TypeId != TYPE_ORE) return false;
 if (t.SubtypeId == SUB_STONE) return true;
 if (t.SubtypeId == SUB_ICE && ejectMode == EjectMode.StoneAndIce) return true;
 return false;
-}
-bool WorthEjecting()
-{
-if (ejectMode == EjectMode.Off || ejectors.Count == 0) return false;
-double waste = 0;
-for (int i = 0; i < cargo.Count; i++)
-{
-IMyInventory inv = cargo[i].GetInventory(0);
-if (inv == null) continue;
-itemScratch.Clear();
-inv.GetItems(itemScratch);
-for (int k = 0; k < itemScratch.Count; k++)
-if (IsWaste(itemScratch[k].Type)) waste += (double)itemScratch[k].Amount;
-}
-return waste > 500;
 }
 bool UnloadToBase()
 {
@@ -1550,6 +1544,9 @@ if (recording) RecordTick();
 CheckDamage();
 Watchdog();
 UpdateOreScan();
+EjectWhileFlying();
+if (!Docked && state != MinerState.Idle && state != MinerState.Fault)
+SetThrusters(true);
 bool entry = stateEntry;
 stateEntry = false;
 switch (state)
@@ -1561,7 +1558,6 @@ case MinerState.Selecting:   StSelecting(entry); break;
 case MinerState.Approaching: StApproaching(entry); break;
 case MinerState.Descending:  StDescending(entry); break;
 case MinerState.Ascending:   StAscending(entry); break;
-case MinerState.Ejecting:    StEjecting(entry); break;
 case MinerState.Inbound:     StInbound(entry); break;
 case MinerState.Docking:     StDocking(entry); break;
 case MinerState.Unloading:   StUnloading(entry); break;
@@ -1587,6 +1583,7 @@ void StUndocking(bool entry)
 if (entry)
 {
 statusLine = "Undocking";
+SetThrusters(true);
 SetBatteryCharging(false);
 SetTanksFilling(false);
 if (Docked) dockConnector.Disconnect();
@@ -1783,7 +1780,6 @@ if (CargoFull || OverLiftLimit() || !HasReservesForWork())
 SetState(MinerState.Inbound);
 return;
 }
-if (WorthEjecting()) { SetState(MinerState.Ejecting); return; }
 SetState(MinerState.Selecting);
 }
 void AbandonShaft(ShaftResult why)
@@ -1791,16 +1787,14 @@ void AbandonShaft(ShaftResult why)
 pendingResult = why;
 SetState(MinerState.Ascending);
 }
-void StEjecting(bool entry)
+void EjectWhileFlying()
 {
-if (entry) { statusLine = "Dumping stone"; SetDrills(false); }
-if (activeCell >= 0)
-FlyTo(ControllerTargetFor(job.CellMouth(CellCol(activeCell), CellRow(activeCell),
-transitAltitude + myLane)), cruiseSpeed * 0.3);
-else
-SetVelocity(Vector3D.Zero);
-Orient(job.Down, job.Forward);
-if (EjectWaste()) SetState(MinerState.Selecting);
+if (ejectMode == EjectMode.Off || ejectors.Count == 0) return;
+if (Docked) return;
+if (state == MinerState.Descending || state == MinerState.Ascending) return;
+if (tick % 20 != 0) return;
+if (BudgetTight(0.6)) return;
+EjectWaste();
 }
 void StInbound(bool entry)
 {
@@ -1859,7 +1853,13 @@ if (UnloadToBase()) SetState(MinerState.Servicing);
 }
 void StServicing(bool entry)
 {
-if (entry) { statusLine = "Charging"; SetBatteryCharging(true); SetTanksFilling(true); }
+if (entry)
+{
+statusLine = "Charging";
+SetBatteryCharging(true);
+SetTanksFilling(true);
+SetThrusters(false);
+}
 if (!Docked) { SetState(MinerState.Docking); return; }
 if (tick % 30 == 0) UnloadToBase();
 if (!jobRunning || jobComplete)
