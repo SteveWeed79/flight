@@ -181,13 +181,12 @@ void BeginShaft()
     noOreTicks = 0;
     stuckRetries = 0;
 
-    // A probe is a cheap look, capped well short of full depth. A production
-    // shaft resumes from wherever a previous visit left off.
-    double alreadyDug = activeCell >= 0 ? cells[activeCell].DepthReached : 0;
-    shaftDepthLimit = shaftIsProbe
-        ? Math.Min(probeDepth, job.Depth)
-        : job.Depth;
-    if (!shaftIsProbe && alreadyDug > 0) shaftMaxDepth = alreadyDug;
+    shaftContactDepth = -1;
+
+    // Metres of rock to cut, not depth from the job plane. A resumed shaft needs
+    // no special handling: the already-cut section returns no material, so
+    // contact is simply detected again at the old bottom.
+    shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 
     SetState(MinerState.Approaching);
 }
@@ -274,10 +273,19 @@ void StDescending(bool entry)
         stuckRefDepth = CurrentShaftDepth(col, row);
         stuckTicks = 0;
         lastOreSample = ShaftOreSoFar();
+        shaftContactDepth = -1;
+        shaftStartVolume = cargoVolume;
     }
 
     shaftDepth = CurrentShaftDepth(col, row);
     if (shaftDepth > shaftMaxDepth) shaftMaxDepth = shaftDepth;
+
+    // First material back means we have reached the real surface. On a planet
+    // that is within a metre of the job plane and this barely matters; on an
+    // asteroid the surface wanders tens of metres either side of it, and
+    // without this every measurement below is taken from the wrong datum.
+    if (shaftContactDepth < 0 && cargoVolume > shaftStartVolume + 0.001)
+        shaftContactDepth = shaftDepth;
 
     // We enter this state from the traffic-separation altitude, which can be
     // 25 m or more above the surface. Descending that gap at cutting speed with
@@ -290,7 +298,7 @@ void StDescending(bool entry)
     // ---- Stop conditions, most urgent first --------------------------------
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
     if (CargoFull || OverLiftLimit()) { AbandonShaft(ShaftResult.CargoFull); return; }
-    if (shaftDepth >= shaftDepthLimit) { AbandonShaft(ShaftResult.Completed); return; }
+    if (shaftDepth >= EffectiveDepthLimit()) { AbandonShaft(ShaftResult.Completed); return; }
     if (DepthExhausted()) { AbandonShaft(ShaftResult.OreExhausted); return; }
 
     // ---- Stuck handling ----------------------------------------------------
@@ -318,7 +326,7 @@ void StDescending(bool entry)
     // the velocity controller holds a steady cutting speed instead of easing off
     // as it approaches a distant target. Clamped at zero so that while we are
     // still above the surface the aim point is inside the rock, not behind us.
-    double aimDepth = Math.Min(shaftDepthLimit, Math.Max(shaftDepth, 0.0) + 5.0);
+    double aimDepth = Math.Min(EffectiveDepthLimit(), Math.Max(shaftDepth, 0.0) + 5.0);
     Vector3D bite = job.CellDepth(col, row, aimDepth);
     FlyTo(ControllerTargetFor(bite), descentSpeed);
     Orient(job.Down, job.Forward);
@@ -364,11 +372,24 @@ void FinishShaft()
     ShaftResult result = pendingResult;
     double ore = ShaftOreSoFar();
 
-    RecordShaftResult(activeCell, result, ore, shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
+    // Yield is kilograms per metre *drilled*, so the vacuum we fell through to
+    // reach the surface must not count. Including it would dilute the yield of
+    // every cell whose surface sits below the job plane, and the prospector
+    // would then steer away from exactly the ground it should be working.
+    double cut = shaftContactDepth >= 0
+        ? Math.Max(0.0, shaftMaxDepth - shaftContactDepth)
+        : 0.0;
+
+    // Never made contact: the shaft was empty space all the way down. Report it
+    // as a completed, barren cell rather than a stuck or failed one.
+    if (shaftContactDepth < 0 && result == ShaftResult.Completed)
+        Log(CellLabel(activeCell) + " never reached rock");
+
+    RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
     ReleaseLeaseLocal();
 
     Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
-        + Fmt(shaftMaxDepth, 1) + "m");
+        + Fmt(cut, 1) + "m cut");
 
     activeCell = -1;
 
@@ -560,6 +581,22 @@ bool HasReservesForWork()
     return true;
 }
 
+/// <summary>
+/// Where this shaft stops, as a depth below the job plane.
+///
+/// Two regimes. Before the drills touch anything we are descending through
+/// vacuum toward a surface that may sit well below the plane, and the only
+/// sensible bound is the job's own depth — no rock by then means an empty cell.
+/// Once contact is made the limit becomes metres of actual cut, so a 12 m probe
+/// really does cut 12 m of rock rather than stopping 12 m below a plane it has
+/// not reached yet.
+/// </summary>
+double EffectiveDepthLimit()
+{
+    if (shaftContactDepth < 0) return job.Depth;
+    return shaftContactDepth + shaftDepthLimit;
+}
+
 /// <summary>Depth in metres of the drill face below the mouth of shaft (col,row).</summary>
 double CurrentShaftDepth(int col, int row)
 {
@@ -604,8 +641,15 @@ bool DepthExhausted()
 {
     if (depthMode == DepthMode.Fixed) return false;
 
-    // The first few metres are surface material and tell us nothing.
-    if (shaftDepth < 6.0) { lastOreGainDepth = shaftDepth; return false; }
+    // Still falling through vacuum toward an asteroid whose surface sits below
+    // the job plane. There is nothing to be exhausted yet — judging the cell
+    // here would write off good rock the drills have not even touched, which is
+    // exactly how an irregular asteroid poisons the whole yield map.
+    if (shaftContactDepth < 0) { lastOreGainDepth = shaftDepth; return false; }
+
+    // The first few metres of actual rock are surface material and tell us
+    // nothing. Measured from contact, not from the plane.
+    if (shaftDepth < shaftContactDepth + 6.0) { lastOreGainDepth = shaftDepth; return false; }
 
     double now = depthMode == DepthMode.AutoOre ? ShaftOreSoFar() : cargoFill * 1000.0;
 

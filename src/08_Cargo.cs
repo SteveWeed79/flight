@@ -21,6 +21,7 @@ void SampleInventories()
         AccumulateInventory(drills[i].GetInventory(0), ref vol, ref maxVol, ref ore);
 
     cargoFill = maxVol > 0 ? vol / maxVol : 0;
+    cargoVolume = vol;
     oreAboard = ore;
 
     // ---- Power ------------------------------------------------------------

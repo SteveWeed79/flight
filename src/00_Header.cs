@@ -25,7 +25,7 @@
  *    5. Run:  job set 5 5 40      (5x5 shafts, 40 m deep)
  *    6. Run:  start
  *
- *  Full docs: docs/SETUP.md, docs/CONFIG.md, docs/DESIGN.md, docs/SCOUTING.md
+ *  Full docs: docs/SETUP.md, docs/CONFIG.md, docs/SPACE.md, docs/DESIGN.md, docs/SCOUTING.md
  *
  *  ---------------------------------------------------------------------------
  *  A NOTE ON ORE DETECTION (read this before asking why it digs dry holes)

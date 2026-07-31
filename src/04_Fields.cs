@@ -119,6 +119,17 @@ double shaftDepthLimit;
 bool shaftIsProbe;
 /// <summary>Ore in drill inventories when the shaft began, kg.</summary>
 double shaftStartOre;
+/// <summary>
+/// Depth at which the drills first brought back material — i.e. where the real
+/// rock surface is. -1 means we are still descending through vacuum.
+///
+/// Depth is measured from the job plane, but on an asteroid the actual surface
+/// wanders tens of metres either side of it. Everything that reasons about "how
+/// far have we drilled" must measure from here, not from the plane.
+/// </summary>
+double shaftContactDepth = -1;
+/// <summary>Total cargo volume when the descent began. Contact detector.</summary>
+double shaftStartVolume;
 /// <summary>Whether the prospect pass has finished its probe lattice.</summary>
 bool probePassDone;
 
@@ -134,6 +145,9 @@ int stuckRetries;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
+/// <summary>Absolute cargo volume. Finer-grained than the fill fraction, which
+/// barely moves on a large ship when a few kilos of rock arrive.</summary>
+double cargoVolume;
 double batteryFill;
 double hydrogenFill;
 /// <summary>kg of valuable ore aboard right now.</summary>

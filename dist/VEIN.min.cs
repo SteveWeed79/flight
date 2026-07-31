@@ -413,6 +413,8 @@ double shaftMaxDepth;
 double shaftDepthLimit;
 bool shaftIsProbe;
 double shaftStartOre;
+double shaftContactDepth = -1;
+double shaftStartVolume;
 bool probePassDone;
 double lastOreSample;
 double lastOreGainDepth;
@@ -421,6 +423,7 @@ double stuckRefDepth;
 int stuckTicks;
 int stuckRetries;
 double cargoFill;
+double cargoVolume;
 double batteryFill;
 double hydrogenFill;
 double oreAboard;
@@ -967,6 +970,7 @@ AccumulateInventory(cargo[i].GetInventory(0), ref vol, ref maxVol, ref ore);
 for (int i = 0; i < drills.Count; i++)
 AccumulateInventory(drills[i].GetInventory(0), ref vol, ref maxVol, ref ore);
 cargoFill = maxVol > 0 ? vol / maxVol : 0;
+cargoVolume = vol;
 oreAboard = ore;
 double stored = 0, capacity = 0;
 for (int i = 0; i < batteries.Count; i++)
@@ -1660,11 +1664,8 @@ lastOreSample = 0;
 lastOreGainDepth = 0;
 noOreTicks = 0;
 stuckRetries = 0;
-double alreadyDug = activeCell >= 0 ? cells[activeCell].DepthReached : 0;
-shaftDepthLimit = shaftIsProbe
-? Math.Min(probeDepth, job.Depth)
-: job.Depth;
-if (!shaftIsProbe && alreadyDug > 0) shaftMaxDepth = alreadyDug;
+shaftContactDepth = -1;
+shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 SetState(MinerState.Approaching);
 }
 void StApproaching(bool entry)
@@ -1712,15 +1713,19 @@ statusLine = (shaftIsProbe ? "Probing " : "Drilling ") + CellLabel(activeCell);
 stuckRefDepth = CurrentShaftDepth(col, row);
 stuckTicks = 0;
 lastOreSample = ShaftOreSoFar();
+shaftContactDepth = -1;
+shaftStartVolume = cargoVolume;
 }
 shaftDepth = CurrentShaftDepth(col, row);
 if (shaftDepth > shaftMaxDepth) shaftMaxDepth = shaftDepth;
+if (shaftContactDepth < 0 && cargoVolume > shaftStartVolume + 0.001)
+shaftContactDepth = shaftDepth;
 bool inRock = shaftDepth > -2.0;
 SetDrills(inRock);
 double descentSpeed = inRock ? drillSpeed : Math.Min(12.0, Math.Max(retreatSpeed, 6.0));
 if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
 if (CargoFull || OverLiftLimit()) { AbandonShaft(ShaftResult.CargoFull); return; }
-if (shaftDepth >= shaftDepthLimit) { AbandonShaft(ShaftResult.Completed); return; }
+if (shaftDepth >= EffectiveDepthLimit()) { AbandonShaft(ShaftResult.Completed); return; }
 if (DepthExhausted()) { AbandonShaft(ShaftResult.OreExhausted); return; }
 if (inRock && IsStuck())
 {
@@ -1734,7 +1739,7 @@ stuckTicks = 0;
 stuckRefDepth = shaftDepth - 2.0;
 return;
 }
-double aimDepth = Math.Min(shaftDepthLimit, Math.Max(shaftDepth, 0.0) + 5.0);
+double aimDepth = Math.Min(EffectiveDepthLimit(), Math.Max(shaftDepth, 0.0) + 5.0);
 Vector3D bite = job.CellDepth(col, row, aimDepth);
 FlyTo(ControllerTargetFor(bite), descentSpeed);
 Orient(job.Down, job.Forward);
@@ -1764,10 +1769,15 @@ void FinishShaft()
 {
 ShaftResult result = pendingResult;
 double ore = ShaftOreSoFar();
-RecordShaftResult(activeCell, result, ore, shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
+double cut = shaftContactDepth >= 0
+? Math.Max(0.0, shaftMaxDepth - shaftContactDepth)
+: 0.0;
+if (shaftContactDepth < 0 && result == ShaftResult.Completed)
+Log(CellLabel(activeCell) + " never reached rock");
+RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
 ReleaseLeaseLocal();
 Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
-+ Fmt(shaftMaxDepth, 1) + "m");
++ Fmt(cut, 1) + "m cut");
 activeCell = -1;
 if (!jobRunning) { SetState(MinerState.Inbound); return; }
 if (result == ShaftResult.Aborted || result == ShaftResult.CargoFull)
@@ -1887,6 +1897,11 @@ if (batteryFill < minBattery) return false;
 if (hydrogenTanks.Count > 0 && hydrogenFill < minHydrogen) return false;
 return true;
 }
+double EffectiveDepthLimit()
+{
+if (shaftContactDepth < 0) return job.Depth;
+return shaftContactDepth + shaftDepthLimit;
+}
 double CurrentShaftDepth(int col, int row)
 {
 Vector3D mouth = job.CellMouth(col, row, 0);
@@ -1910,7 +1925,8 @@ return stuckTicks > 40;
 bool DepthExhausted()
 {
 if (depthMode == DepthMode.Fixed) return false;
-if (shaftDepth < 6.0) { lastOreGainDepth = shaftDepth; return false; }
+if (shaftContactDepth < 0) { lastOreGainDepth = shaftDepth; return false; }
+if (shaftDepth < shaftContactDepth + 6.0) { lastOreGainDepth = shaftDepth; return false; }
 double now = depthMode == DepthMode.AutoOre ? ShaftOreSoFar() : cargoFill * 1000.0;
 if (now > lastOreSample + 0.5)
 {
