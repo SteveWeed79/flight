@@ -130,19 +130,6 @@ double shaftContactDepth = -1;
 double shaftStartVolume;
 /// <summary>Whether the prospect pass has finished its probe lattice.</summary>
 bool probePassDone;
-/// <summary>How many times this job has walked toward continuing ore.</summary>
-int followCount;
-
-// ---- Self-tuning ----------------------------------------------------------
-/// <summary>Live drilling speed. Never exceeds the configured drillSpeed.</summary>
-double learnedDrillSpeed;
-/// <summary>Live braking derate. Never exceeds BRAKE_DERATE.</summary>
-double learnedBrakeDerate;
-int cleanCutTicks;
-int drillStalls;
-int brakeOvershoots;
-bool brakeWatchArmed;
-double brakeClosest;
 
 // ---- Adaptive depth -------------------------------------------------------
 double lastOreSample;
@@ -233,20 +220,6 @@ int myDockSlot = -1;
 readonly Dictionary<int, long> dockSlotOwner = new Dictionary<int, long>();
 /// <summary>Tick we last asked the dispatcher for something, for retry backoff.</summary>
 long lastRequestTick;
-
-// ---- Airspace locks -------------------------------------------------------
-/// <summary>Miner: section we currently hold, empty if none.</summary>
-string heldLock = "";
-bool awaitingLock;
-long lockAskedTick;
-/// <summary>Dispatcher: who holds each section.</summary>
-readonly Dictionary<string, long> lockOwner = new Dictionary<string, long>();
-/// <summary>Dispatcher: FIFO of drones waiting on each section.</summary>
-readonly Dictionary<string, List<long>> lockQueue = new Dictionary<string, List<long>>();
-/// <summary>Dispatcher: when each held section falls in, if unrenewed.</summary>
-readonly Dictionary<string, long> lockExpiry = new Dictionary<string, long>();
-/// <summary>Scratch for mutating the lock tables without enumerating while removing.</summary>
-readonly List<string> lockScratch = new List<string>();
 
 // ---- Scouting -------------------------------------------------------------
 /// <summary>True once we have confirmed the Ore Detector Raycast mod responds.</summary>

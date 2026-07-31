@@ -24,6 +24,11 @@
 /// pessimistic in gravity, where it subtracts the full gravity magnitude from
 /// available deceleration, but in space that subtraction is zero and this is the
 /// only margin there is.
+///
+/// This is now only the *starting point*. The ship measures how much of its
+/// braking authority approaches genuinely demand and moves the figure to suit
+/// itself — see 20_Adaptive.cs, which explains why shipping any fixed number
+/// here was the wrong instinct in the first place.
 /// </summary>
 const double BRAKE_DERATE = 0.60;
 
@@ -161,9 +166,15 @@ void FlyTo(Vector3D target, double maxSpeed)
 
     // Speed we could still shed before arriving: v = sqrt(2 a d).
     double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * learnedBrakeDerate;
+    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BrakeDerateNow();
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
+
+    // Closing speed along the approach, not total speed: lateral drift is the
+    // controller's problem, not the stopping distance's. Sampled here because
+    // this is the one place that knows both the geometry and the capability.
+    UpdateBrakeLearning(arrivalSpeed < maxSpeed, distToTarget,
+                        Vector3D.Dot(shipVel, dir), stopAccel);
 
     // Do not travel fast while still swinging round. PAM does the same thing and
     // the reason is practical: the drills point along the ship's forward axis,

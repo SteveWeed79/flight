@@ -50,5 +50,5 @@
  *  LICENSE: MIT. Use it, fork it, sell blueprints with it. Credit is nice.
  *//////////////////////////////////////////////////////////////////////////////
 
-const string VEIN_VERSION = "1.0.0";
-const string STORAGE_REV  = "2";   // bump on ANY change to a persisted enum or field order
+const string VEIN_VERSION = "1.1.0";
+const string STORAGE_REV  = "3";   // bump on ANY change to a persisted enum or field order
