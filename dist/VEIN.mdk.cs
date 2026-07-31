@@ -4573,7 +4573,11 @@ namespace VEIN
                 catch { /* a screen destroyed this tick must not take the script down */ }
             }
 
-            RenderSprites();
+            // Sprites are redrawn far less often than the text. A dashboard costs one
+            // sprite per map cell, which on a small-grid job is several hundred per
+            // frame, and nobody reads a gauge at 2 Hz. Every 12 ticks is about half a
+            // second and is indistinguishable to the eye.
+            if (force || tick % 12 == 0) RenderSprites();
 
             if (verboseEcho) Echo(lastRender);
         }
@@ -5312,10 +5316,11 @@ namespace VEIN
             for (int i = 0; i < cells.Length; i++)
                 if (cells[i].Yield > peak) peak = cells[i].Yield;
 
-            // Sprite count is the real cost here. Past a few hundred the tick budget
-            // suffers, so very large jobs draw a coarse summary rather than every cell.
+            // One sprite per cell is the dominant cost of the whole dashboard. Past a
+            // few hundred it is a meaningful share of the tick budget for a picture no
+            // one can read cell-by-cell anyway, so large jobs draw a coarser summary.
             int step = 1;
-            while ((job.Width / step) * (job.Height / step) > 600) step++;
+            while ((job.Width / step) * (job.Height / step) > 280) step++;
 
             for (int row = 0; row < job.Height; row += step)
             {

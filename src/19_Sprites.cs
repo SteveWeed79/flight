@@ -144,10 +144,11 @@ void DrawMapPanel(MySpriteDrawFrame frame, Vector2 pos, Vector2 size)
     for (int i = 0; i < cells.Length; i++)
         if (cells[i].Yield > peak) peak = cells[i].Yield;
 
-    // Sprite count is the real cost here. Past a few hundred the tick budget
-    // suffers, so very large jobs draw a coarse summary rather than every cell.
+    // One sprite per cell is the dominant cost of the whole dashboard. Past a
+    // few hundred it is a meaningful share of the tick budget for a picture no
+    // one can read cell-by-cell anyway, so large jobs draw a coarser summary.
     int step = 1;
-    while ((job.Width / step) * (job.Height / step) > 600) step++;
+    while ((job.Width / step) * (job.Height / step) > 280) step++;
 
     for (int row = 0; row < job.Height; row += step)
     {

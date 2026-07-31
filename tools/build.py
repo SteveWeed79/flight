@@ -42,10 +42,20 @@ using VRageMath;
 """
 
 
-def module_files():
+# Modules that can be dropped to buy back character budget. The dashboard is
+# the second-largest module in the project and the only one that is purely
+# cosmetic, so it is the obvious thing to sacrifice if you need headroom for
+# your own additions.
+OPTIONAL = {"--no-sprites": "19_Sprites.cs"}
+
+
+def module_files(excluded):
     if not os.path.isdir(SRC):
         sys.exit("No src/ directory at %s" % SRC)
-    files = sorted(f for f in os.listdir(SRC) if f.endswith(".cs"))
+    files = sorted(
+        f for f in os.listdir(SRC)
+        if f.endswith(".cs") and f not in excluded
+    )
     if not files:
         sys.exit("No .cs modules found in src/")
     return [os.path.join(SRC, f) for f in files]
@@ -70,8 +80,19 @@ def indent(text, spaces):
 
 
 def main():
-    paths = module_files()
+    excluded = {name for flag, name in OPTIONAL.items() if flag in sys.argv}
+    paths = module_files(excluded)
     body = combine(paths)
+
+    if excluded:
+        # Sprite rendering is called from the text display, so the call has to go
+        # too or the build will not compile.
+        body = body.replace("if (force || tick % 12 == 0) RenderSprites();", "")
+        body = body.replace("s.ContentType = ContentType.SCRIPT;",
+                            "s.ContentType = ContentType.TEXT_AND_IMAGE;")
+        body = body.replace('s.Script = "";', 's.Font = "Monospace"; s.FontSize = 0.55f;')
+        body = body.replace("s.ScriptBackgroundColor = C_BG;", "")
+        body = body.replace("panels.Add(s);", "screens.Add(s);")
 
     os.makedirs(DIST, exist_ok=True)
 
@@ -93,6 +114,8 @@ def main():
 
     lines = body.count("\n") + 1
     chars = len(body)
+    if excluded:
+        print("Excluded: %s" % ", ".join(sorted(excluded)))
     print("Built from %d modules" % len(paths))
     print("  %-22s %6d lines  %7d chars" % ("dist/VEIN.cs", lines, chars))
     print("  %-22s (MDK2 / Visual Studio harness)" % "dist/VEIN.mdk.cs")

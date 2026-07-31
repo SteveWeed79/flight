@@ -2698,7 +2698,7 @@ for (int i = 0; i < screens.Count; i++)
 try { screens[i].WriteText(lastRender); }
 catch {   }
 }
-RenderSprites();
+if (force || tick % 12 == 0) RenderSprites();
 if (verboseEcho) Echo(lastRender);
 }
 void RenderMiner()
@@ -3232,7 +3232,7 @@ float peak = 0.01f;
 for (int i = 0; i < cells.Length; i++)
 if (cells[i].Yield > peak) peak = cells[i].Yield;
 int step = 1;
-while ((job.Width / step) * (job.Height / step) > 600) step++;
+while ((job.Width / step) * (job.Height / step) > 280) step++;
 for (int row = 0; row < job.Height; row += step)
 {
 for (int col = 0; col < job.Width; col += step)

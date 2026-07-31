@@ -53,7 +53,11 @@ void Render(bool force = false)
         catch { /* a screen destroyed this tick must not take the script down */ }
     }
 
-    RenderSprites();
+    // Sprites are redrawn far less often than the text. A dashboard costs one
+    // sprite per map cell, which on a small-grid job is several hundred per
+    // frame, and nobody reads a gauge at 2 Hz. Every 12 ticks is about half a
+    // second and is indistinguishable to the eye.
+    if (force || tick % 12 == 0) RenderSprites();
 
     if (verboseEcho) Echo(lastRender);
 }
