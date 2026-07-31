@@ -1,0 +1,190 @@
+// ============================================================================
+//  RUNTIME STATE
+// ============================================================================
+
+// ---- Diagnostics ----------------------------------------------------------
+string configError = "";
+string statusLine = "Booting";
+string faultReason = "";
+readonly List<string> log = new List<string>();
+const int LOG_MAX = 12;
+
+/// <summary>Ticks since compile. Our clock. One tick = one Main() call.</summary>
+long tick;
+/// <summary>Wall-clock seconds since compile, accumulated from TimeSinceLastRun.</summary>
+double clock;
+/// <summary>Seconds elapsed since the previous Main(). The dt for all control maths.</summary>
+double dt = 1.0 / 6.0;
+/// <summary>Rolling peak of instruction-count usage, as a fraction. Shown on the LCD.</summary>
+double loadPeak;
+/// <summary>Last fully-rendered screen text, re-echoed on the ticks we skip.</summary>
+string lastRender = "";
+
+// ---- Blocks ---------------------------------------------------------------
+IMyShipController controller;         // remote control preferred, cockpit accepted
+IMyShipConnector dockConnector;
+readonly List<IMyGyro> gyros = new List<IMyGyro>();
+readonly List<IMyThrust> thrusters = new List<IMyThrust>();
+readonly List<IMyShipDrill> drills = new List<IMyShipDrill>();
+readonly List<IMyCargoContainer> cargo = new List<IMyCargoContainer>();
+readonly List<IMyBatteryBlock> batteries = new List<IMyBatteryBlock>();
+readonly List<IMyGasTank> hydrogenTanks = new List<IMyGasTank>();
+readonly List<IMyShipConnector> ejectors = new List<IMyShipConnector>();
+readonly List<IMyTextSurface> screens = new List<IMyTextSurface>();
+readonly List<IMyCameraBlock> cameras = new List<IMyCameraBlock>();
+readonly List<IMyOreDetector> oreDetectors = new List<IMyOreDetector>();
+readonly List<IMyShipConnector> baseConnectors = new List<IMyShipConnector>(); // dispatcher side
+
+/// <summary>Tick of the last full block rescan. We rescan periodically so that
+/// welding on a new thruster mid-job is picked up without a recompile.</summary>
+long lastScanTick = long.MinValue;
+const int RESCAN_INTERVAL = 600;      // ~60 s at Update10
+
+// ---- Ship profile ---------------------------------------------------------
+double shipMass = 1.0;
+/// <summary>Bounding radius of the grid, metres. Used for standoffs and stuck margins.</summary>
+double shipRadius = 3.0;
+/// <summary>Effective cutting radius of the drill head, metres.</summary>
+double drillRadius = 1.4;
+/// <summary>Local-frame offset from the controller to the drill face. Where the hole actually starts.</summary>
+Vector3D drillOffset = Vector3D.Zero;
+bool isLargeGrid;
+/// <summary>Shaft pitch this hull's drill head implies. Copied into the job when
+/// a job is created; never applied to a job received from a dispatcher.</summary>
+double derivedSpacing = 2.4;
+
+/// <summary>
+/// Point that shaft selection measures travel distance from. A solo miner uses
+/// its own position; a dispatcher uses the position of whichever drone is asking,
+/// so drones are sent to the work nearest them rather than nearest the base.
+/// </summary>
+Vector3D selectionOrigin;
+
+/// <summary>Distinct thruster subtype ids, in a stable order. Index space for
+/// <see cref="Waypoint.ThrusterEfficiency"/>.</summary>
+readonly List<string> thrusterTypes = new List<string>();
+/// <summary>Max effective thrust per local direction: [axis 0..2, sign 0=+ 1=-].</summary>
+readonly float[,] thrustByAxis = new float[3, 2];
+/// <summary>Same, split per thruster subtype, so we can reason about atmosphere.</summary>
+readonly Dictionary<string, float[,]> thrustByType = new Dictionary<string, float[,]>();
+/// <summary>Thrusters bucketed by local push direction. Rebuilt on rescan.</summary>
+readonly List<IMyThrust>[,] thrustBuckets = new List<IMyThrust>[3, 2];
+
+// ---- Navigation -----------------------------------------------------------
+Vector3D shipPos;
+Vector3D shipVel;
+Vector3D gravity;
+double speed;
+
+/// <summary>Where the flight controller is currently trying to put the ship.</summary>
+Vector3D flightTarget;
+double flightMaxSpeed;
+bool flightActive;
+/// <summary>Desired facing. Zero-length means "hold current orientation".</summary>
+Vector3D faceDirection = Vector3D.Zero;
+Vector3D faceUp = Vector3D.Zero;
+/// <summary>Distance to the active flight target, metres.</summary>
+double distToTarget;
+/// <summary>Degrees of angular error on the current orientation command.</summary>
+double alignError;
+
+// ---- Path -----------------------------------------------------------------
+readonly List<Waypoint> path = new List<Waypoint>();
+bool recording;
+Vector3D lastRecordPos;
+/// <summary>Index into <see cref="path"/> while flying it. Direction depends on state.</summary>
+int pathIndex;
+/// <summary>The dock we launched from, recorded as waypoint zero's frame.</summary>
+Waypoint homeDock;
+Vector3D homeDockForward;
+Vector3D homeDockUp;
+bool homeDockSet;
+
+/// <summary>Heaviest total mass we can still fly the whole recorded path with.
+/// Recomputed from thrust efficiency samples along the route. -1 = unknown.</summary>
+double maxFlyableMass = -1;
+
+// ---- Job ------------------------------------------------------------------
+readonly Job job = new Job();
+YieldCell[] cells = new YieldCell[0];
+/// <summary>Cell index currently being worked, -1 = none.</summary>
+int activeCell = -1;
+/// <summary>Metres drilled in the current shaft.</summary>
+double shaftDepth;
+/// <summary>Deepest point reached in the current shaft. Depth can dip when we back off.</summary>
+double shaftMaxDepth;
+/// <summary>Depth cap for the current shaft; probes get a shallow one.</summary>
+double shaftDepthLimit;
+/// <summary>True if the current shaft is a scouting probe rather than production.</summary>
+bool shaftIsProbe;
+/// <summary>Ore in drill inventories when the shaft began, kg.</summary>
+double shaftStartOre;
+/// <summary>Whether the prospect pass has finished its probe lattice.</summary>
+bool probePassDone;
+
+// ---- Adaptive depth -------------------------------------------------------
+double lastOreSample;
+double lastOreGainDepth;
+int noOreTicks;
+
+// ---- Stuck detection ------------------------------------------------------
+double stuckRefDepth;
+int stuckTicks;
+int stuckRetries;
+
+// ---- Cargo / power --------------------------------------------------------
+double cargoFill;
+double batteryFill;
+double hydrogenFill;
+/// <summary>kg of valuable ore aboard right now.</summary>
+double oreAboard;
+
+// ---- State machine --------------------------------------------------------
+MinerState state = MinerState.Idle;
+MinerState prevState = MinerState.Idle;
+/// <summary>Ticks spent in the current state. Watchdog input.</summary>
+int stateTicks;
+/// <summary>True only on the first tick of a state. Where per-state setup happens.</summary>
+bool stateEntry = true;
+/// <summary>Set when the operator has asked for work; cleared by "stop".</summary>
+bool jobRunning;
+/// <summary>Set when the job is finished, to stop us relaunching forever.</summary>
+bool jobComplete;
+/// <summary>Why the current shaft is ending. Read by FinishShaft once we are clear of the hole.</summary>
+ShaftResult pendingResult = ShaftResult.Completed;
+/// <summary>Fleet mode: a lease request is outstanding with the dispatcher.</summary>
+bool awaitingLease;
+
+// ---- Fleet ----------------------------------------------------------------
+IMyBroadcastListener listener;
+IMyUnicastListener unicast;
+/// <summary>Dispatcher address if we have found one, 0 otherwise.</summary>
+long dispatcherAddr;
+long lastDispatcherSeenTick;
+/// <summary>Dispatcher: everyone who has checked in.</summary>
+readonly Dictionary<long, DroneRecord> fleet = new Dictionary<long, DroneRecord>();
+/// <summary>Miner: our assigned altitude lane over the site, metres.</summary>
+double myLane;
+/// <summary>Miner: dock slot we hold, -1 = none.</summary>
+int myDockSlot = -1;
+/// <summary>Dispatcher: which drone holds each dock slot.</summary>
+readonly Dictionary<int, long> dockSlotOwner = new Dictionary<int, long>();
+/// <summary>Tick we last asked the dispatcher for something, for retry backoff.</summary>
+long lastRequestTick;
+
+// ---- Scouting -------------------------------------------------------------
+/// <summary>True once we have confirmed the Ore Detector Raycast mod responds.</summary>
+bool oreModAvailable;
+/// <summary>Set after the one-time probe, so we do not retest every tick.</summary>
+bool oreModProbed;
+readonly List<OreSighting> sightings = new List<OreSighting>();
+const int SIGHTINGS_MAX = 64;
+int scanAzimuth;
+int scanElevation;
+
+// ---- Reusable scratch -----------------------------------------------------
+// Allocating inside Main() is how SE scripts end up stuttering. These are
+// cleared and refilled instead.
+readonly List<MyInventoryItem> itemScratch = new List<MyInventoryItem>();
+readonly List<IMyTerminalBlock> blockScratch = new List<IMyTerminalBlock>();
+readonly StringBuilder sb = new StringBuilder();
