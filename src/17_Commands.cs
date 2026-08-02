@@ -93,6 +93,10 @@ void HandleCommand(string argument, bool allowRelay = true)
             }
             break;
 
+        case "solo":
+            CmdSolo();
+            break;
+
         case "purge":
             // The escape hatch, and SCAM is right to ship one. Expiry should
             // make it unnecessary; "should" is not a thing to rely on at 2am.
@@ -139,6 +143,15 @@ void CmdStart()
         return;
     }
 
+    // A drone whose dispatcher has gone quiet would undock, fly the whole
+    // route, find nobody to lease a shaft from and come straight back. Say so
+    // instead, and name the command that overrides it.
+    if (DispatcherSilent)
+    {
+        Log("Cannot start: dispatcher silent. Use 'solo' to work without it");
+        return;
+    }
+
     Health h = CheckReadiness();
     if (!h.Ok) { Log("Cannot start: " + h.Detail); return; }
 
@@ -146,6 +159,29 @@ void CmdStart()
     jobComplete = false;
     Log("Started");
     if (state == MinerState.Idle) SetState(Docked ? MinerState.Undocking : MinerState.Outbound);
+}
+
+/// <summary>
+/// Deliberately leave the fleet and work the local map alone.
+///
+/// The escape hatch for a dispatcher that is not coming back. This is a
+/// decision and not a fallback, which is the whole point of it being a command:
+/// a drone that detaches on its own does so at the same moment every other
+/// survivor does, and they then dig the same map with the airspace mutex
+/// switched off, because a solo ship skips it. An operator detaching one ship
+/// knows what the rest of the fleet is doing. Hearing a beacon again re-joins.
+/// </summary>
+void CmdSolo()
+{
+    if (role != Role.Miner) { Log("Only a miner can go solo"); return; }
+    if (dispatcherAddr == 0) { Log("Already solo"); return; }
+
+    ReleaseAirspace();
+    ReleaseDock();
+    dispatcherAddr = 0;
+    awaitingLease = false;
+    activeLeaseId = 0;
+    Log("Detached from dispatcher — working solo");
 }
 
 void CmdReset()

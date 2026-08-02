@@ -119,6 +119,7 @@ Run these as the Programmable Block's argument.
 | `order serpentine\|spiral\|prospect` | Shaft ordering |
 | `eject off\|stone\|stoneandice` | What to throw overboard |
 | `fleet <command>` | Relay a command to every drone on the channel |
+| `solo` | Leave the fleet and work the local map alone. For a dispatcher that is not coming back |
 | `purge` | Release every airspace lock. The 2am escape hatch |
 | `learn` / `learn reset` | Show what the ship has measured about itself, or forget it |
 | `reload` | Re-read Custom Data and rescan blocks |

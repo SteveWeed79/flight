@@ -336,7 +336,10 @@ SCAM's dispatcher model is right. VEIN tightens the failure handling:
   exclusion across the whole fleet at the moment it is least affordable, with
   each drone then self-assigning shafts from a local map that knows nothing of
   the others' leases. It finishes the shaft in hand, returns to base, and waits
-  on the pad until a beacon comes back.
+  on the pad until a beacon comes back. An operator who knows the dispatcher is
+  not coming back detaches a drone explicitly with `solo` — a decision taken with
+  sight of what the rest of the fleet is doing, which is exactly what an
+  automatic fallback firing on every survivor at once cannot be.
 
 ### 4. Stability work
 
