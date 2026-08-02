@@ -93,6 +93,13 @@ sits on a surface. On an asteroid it routinely overhangs empty space, and the
 camera check is what stops the ship flying a full descend-and-ascend cycle into
 vacuum. Without one every empty cell is paid for the slow way.
 
+The check accepts rock anywhere within the job's own depth, not just near the
+plane, because on an asteroid the surface genuinely does sit tens of metres below
+it — the descent is written to tolerate exactly that, and a stricter camera would
+write off good rock as barren for good. It therefore scans the full depth, so a
+camera short of that much charge simply returns no answer and the ship descends
+as it would have without one. Deep jobs want a camera that is left armed.
+
 **Probe depth is the setting to get right.** Asteroid ore is deep. If the survey
 reports everything barren, raise `probeDepth` before touching anything else.
 

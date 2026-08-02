@@ -237,6 +237,11 @@ int myDockSlot = -1;
 readonly Dictionary<int, long> dockSlotOwner = new Dictionary<int, long>();
 /// <summary>Tick we last asked the dispatcher for something, for retry backoff.</summary>
 long lastRequestTick;
+/// <summary>Miner: the grant our current shaft is being dug under, echoed back
+/// in the report so the dispatcher can tell it from a later one. 0 = none.</summary>
+long activeLeaseId;
+/// <summary>Dispatcher: source of lease ids. Only ever increments.</summary>
+long nextLeaseId;
 
 // ---- Scouting -------------------------------------------------------------
 /// <summary>True once we have confirmed the Ore Detector Raycast mod responds.</summary>

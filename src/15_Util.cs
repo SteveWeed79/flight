@@ -114,6 +114,12 @@ static int ParseInt(string s, int fallback)
     return int.TryParse(s, out v) ? v : fallback;
 }
 
+static long ParseLong(string s, long fallback)
+{
+    long v;
+    return long.TryParse(s, out v) ? v : fallback;
+}
+
 static double ParseDouble(string s, double fallback)
 {
     // Operator input, so it may genuinely contain a decimal point. Parse the

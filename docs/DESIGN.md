@@ -322,12 +322,21 @@ SCAM's dispatcher model is right. VEIN tightens the failure handling:
   and a **slot** says which base connector is yours.
 - **Work goes to the nearest drone.** The dispatcher scores the site from the
   requesting drone's position, not from the base.
-- **Stale reports are rejected.** Only the drone currently holding a lease may
-  report on it, so a late message from an expired lease cannot overwrite the
-  result of whoever is digging that cell now.
+- **Stale reports are rejected.** Every grant carries a monotonic lease id, which
+  the drone echoes back in its report; the dispatcher accepts a report only when
+  the id matches the lease the cell is under right now. An address on its own
+  could not do this — it cannot tell two successive leases apart, and it says
+  nothing at all about a cell whose lease has expired and been cleared, which is
+  exactly the case the check exists for. Matching the grant also makes reports
+  idempotent, so a duplicated message cannot add the same ore to the map twice.
 - **The dispatcher is optional.** A miner that hears no beacon runs the identical
-  job logic locally. A miner whose dispatcher goes quiet mid-job logs it and
-  continues solo rather than parking forever.
+  job logic locally. A miner whose dispatcher goes quiet *mid-job* is a different
+  case and does not fall back to solo: airspace locks and dock slots are skipped
+  entirely by a solo ship, so promoting every survivor at once would drop
+  exclusion across the whole fleet at the moment it is least affordable, with
+  each drone then self-assigning shafts from a local map that knows nothing of
+  the others' leases. It finishes the shaft in hand, returns to base, and waits
+  on the pad until a beacon comes back.
 
 ### 4. Stability work
 
@@ -359,8 +368,10 @@ babysit:
   is not killed for complexity.
 - **It never resumes mid-shaft after a reload.** The world has moved on: the ship
   may have been dragged, the voxels may have been changed by someone else, and
-  the control loop has no history. It comes up idle and waits to be told to
-  continue. A fault, by contrast, is preserved, because whatever caused it
+  the control loop has no history. It comes up idle *and stopped* — the run flag
+  does not survive a reload from a flying state either, since coming up idle with
+  it still set means launching on the next tick, which is the same thing with an
+  extra step — and waits to be told to continue. A fault, by contrast, is preserved, because whatever caused it
   probably has not fixed itself.
 - **Integers on the wire.** Every number in an inter-grid message is an integer
   scaled by 1000. A script that writes `"12.5"` and is read by a client whose

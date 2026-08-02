@@ -106,6 +106,13 @@ public class YieldCell
     public float DepthReached;
     /// <summary>Which drone holds this cell, 0 = nobody.</summary>
     public long LeasedBy;
+    /// <summary>
+    /// Which *grant* the holder is working under, 0 = none. Monotonic per
+    /// dispatcher, so two successive leases on the same cell to the same drone
+    /// are still distinguishable — an address alone cannot tell them apart, and
+    /// that is exactly the case a lease that expired and was reissued produces.
+    /// </summary>
+    public long LeaseId;
     /// <summary>Clock reading, in seconds, at which an unrenewed lease expires.
     /// Zero means no lease. Absolute, so a lag spike cannot move it.</summary>
     public double LeaseExpiresAt;

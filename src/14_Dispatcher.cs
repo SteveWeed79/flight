@@ -46,6 +46,7 @@ void ExpireLeases()
         Log("Lease on " + CellLabel(i) + " expired — reissuing");
         c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
         c.LeasedBy = 0;
+        c.LeaseId = 0;
         c.LeaseExpiresAt = 0;
     }
 }
@@ -75,6 +76,8 @@ void ExpireDrones()
             {
                 c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
                 c.LeasedBy = 0;
+                c.LeaseId = 0;
+                c.LeaseExpiresAt = 0;
             }
         }
 

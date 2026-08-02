@@ -125,7 +125,8 @@ void SendShaftReport(int cellIdx, ShaftResult result, double oreKg, double metre
     if (dispatcherAddr == 0) return;
     string body = "SR|" + cellIdx + "|" + (int)result
                 + "|" + EncD(oreKg) + "|" + EncD(metres)
-                + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0);
+                + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0)
+                + "|" + activeLeaseId;
     IGC.SendUnicastMessage(dispatcherAddr, igcChannel, body);
 }
 
@@ -164,6 +165,9 @@ void ReleaseLeaseLocal()
     if (activeCell < 0 || activeCell >= cells.Length) return;
     if (cells[activeCell].State == CellState.Leased) cells[activeCell].State = CellState.Unknown;
     cells[activeCell].LeasedBy = 0;
+    // Our copy of the grant goes with it. A report sent after this point would
+    // carry an id the dispatcher has already retired, which is the point.
+    activeLeaseId = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,10 +230,10 @@ bool AdoptJobFrame(string[] f, int at)
     return true;
 }
 
-void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane)
+void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane, long leaseId)
 {
     string body = "LG|" + cellIdx + "|" + EncD(depthLimit)
-                + "|" + (isProbe ? 1 : 0) + "|" + EncD(lane);
+                + "|" + (isProbe ? 1 : 0) + "|" + EncD(lane) + "|" + leaseId;
     IGC.SendUnicastMessage(to, igcChannel, body);
 }
 
@@ -374,21 +378,23 @@ void OnLeaseRequest(long src, string[] f)
 
     cells[cell].State = CellState.Leased;
     cells[cell].LeasedBy = src;
+    cells[cell].LeaseId = ++nextLeaseId;
     cells[cell].LeaseExpiresAt = clock + droneTimeout * 2;
     r.LeasedCell = cell;
 
     double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
-    GrantLease(src, cell, limit, shaftIsProbe, r.Lane);
+    GrantLease(src, cell, limit, shaftIsProbe, r.Lane, cells[cell].LeaseId);
 }
 
 void OnLeaseGrant(long src, string[] f)
 {
-    if (role != Role.Miner || f.Length < 5) return;
+    if (role != Role.Miner || f.Length < 6) return;
 
     activeCell = ParseInt(f[1], -1);
     shaftDepthLimit = DecD(f[2]);
     shaftIsProbe = f[3] == "1";
     myLane = DecD(f[4]);
+    activeLeaseId = ParseLong(f[5], 0);
 
     if (activeCell >= 0 && activeCell < cells.Length)
         cells[activeCell].State = CellState.Leased;
@@ -419,15 +425,31 @@ void OnLeaseDenied(long src, string[] f)
 
 void OnShaftReport(long src, string[] f)
 {
-    if (role != Role.Dispatcher || f.Length < 7) return;
+    if (role != Role.Dispatcher || f.Length < 8) return;
 
     int idx = ParseInt(f[1], -1);
     if (idx < 0 || idx >= cells.Length) return;
 
-    // Only the drone that holds the lease may report on it. Without this a
-    // stale message from a drone whose lease already expired would overwrite
-    // the result of whoever is digging that cell now.
-    if (cells[idx].LeasedBy != 0 && cells[idx].LeasedBy != src) return;
+    // Only the drone holding this exact lease may report on it.
+    //
+    // The address on its own was not enough, in two directions. It let a report
+    // through whenever the cell was unowned — which is precisely the state an
+    // expired lease leaves behind — so the stale message this check exists to
+    // stop was accepted rather than rejected. And because RecordShaftResult
+    // clears the holder, it also let a duplicated message through a second time,
+    // adding the same ore and the same metres to the map twice.
+    //
+    // Matching the grant closes both. The id is issued once, echoed back once,
+    // and cleared when the lease ends, so a report is accepted exactly when it
+    // describes the lease the cell is under right now.
+    long reported = ParseLong(f[7], 0);
+    if (cells[idx].LeaseId == 0 || cells[idx].LeaseId != reported || cells[idx].LeasedBy != src)
+    {
+        // Worth a line: a drone reporting under a dead lease has lost real
+        // drilling, and silence would make that look like a cell nobody touched.
+        Log("Ignored stale report on " + CellLabel(idx));
+        return;
+    }
 
     ShaftResult result = (ShaftResult)ParseInt(f[2], 0);
     RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
