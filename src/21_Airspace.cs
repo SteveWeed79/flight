@@ -72,8 +72,10 @@ bool AcquireAirspace(string section)
     }
 
     // Waiting is bounded. A dispatcher that has stopped answering must not be
-    // able to hold the whole fleet in mid-air, which is the same reasoning that
-    // makes a missing dispatcher fall back to solo mining rather than parking.
+    // able to hold the whole fleet in mid-air. Note what the override does and
+    // does not do: this ship stops waiting for a section nobody is granting, so
+    // it can fly home. It does not resume mining unpoliced — a drone whose
+    // dispatcher has gone silent returns to base and waits there.
     if (clock - lockWaitStartedAt > lockPatience)
     {
         if (!lockOverridden)
