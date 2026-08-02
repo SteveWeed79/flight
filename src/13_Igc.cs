@@ -72,6 +72,29 @@ void HandleMessage(long src, string body)
 
 bool HasDispatcher { get { return role == Role.Miner && dispatcherAddr != 0; } }
 
+/// <summary>
+/// True when we belong to a fleet whose dispatcher has stopped beaconing.
+///
+/// Deliberately does not clear <see cref="dispatcherAddr"/>. A drone that
+/// forgets its dispatcher stops being a fleet member in every other part of the
+/// script at once — most sharply in AcquireAirspace and AcquireDockSlot, both of
+/// which return true unconditionally for a solo ship. One dispatcher outage
+/// would therefore switch off the site mutex for every surviving drone
+/// simultaneously and leave them all self-assigning shafts from local maps that
+/// know nothing of each other's leases: several loaded miners converging on the
+/// same hole with no exclusion left between them. Staying nominally in the fleet
+/// keeps the locks in play — unanswered, so they expire into the bounded
+/// override that already exists — while the ships head home.
+/// </summary>
+bool DispatcherSilent
+{
+    get
+    {
+        return HasDispatcher
+            && tick - lastDispatcherSeenTick > (long)(droneTimeout / Math.Max(dt, 0.01));
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  OUTBOUND — miner side
 // ---------------------------------------------------------------------------

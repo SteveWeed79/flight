@@ -55,6 +55,14 @@ void StIdle(bool entry)
     if (entry) { SafeStop(); ReleaseAirspace(); statusLine = "Idle"; }
     if (!jobRunning || jobComplete) return;
 
+    // A fleet drone launches on the dispatcher's word, not its own. Without
+    // this, a drone that had just come home *because* the dispatcher went quiet
+    // would take off again immediately, fly to the site, find nobody to lease
+    // from, and come back — a round trip's worth of hydrogen per lap, for as
+    // long as the outage lasts. Waiting on the pad costs nothing and resumes by
+    // itself the moment a beacon arrives.
+    if (DispatcherSilent) { statusLine = "Waiting for dispatcher"; return; }
+
     Health h = CheckReadiness();
     if (!h.Ok) { statusLine = "Not ready: " + h.Detail; return; }
 
@@ -142,14 +150,21 @@ void StSelecting(bool entry)
 
         if (activeCell >= 0) { awaitingLease = false; BeginShaft(); return; }
 
-        // Retry, then fall back. A dispatcher that has stopped answering must not
-        // be able to park the whole fleet indefinitely.
+        // Retry, then go home. A dispatcher that has stopped answering must not
+        // be able to park the whole fleet in mid-air — but the fix for that is
+        // not to promote every survivor to solo mining, which is what this used
+        // to do. See DispatcherSilent: solo ships skip the airspace mutex, so
+        // that turned one dead dispatcher into several drones digging the same
+        // deposit with no exclusion between them. The shaft already in hand is
+        // always finished first; this branch only ever runs between shafts.
         if (tick - lastRequestTick > 60)
         {
-            if (tick - lastDispatcherSeenTick > (long)(droneTimeout / Math.Max(dt, 0.01)))
+            if (DispatcherSilent)
             {
-                Log("Dispatcher lost — continuing solo");
-                dispatcherAddr = 0;
+                Log("Dispatcher silent — returning to base");
+                awaitingLease = false;
+                SetState(MinerState.Inbound);
+                return;
             }
             awaitingLease = false;
         }
@@ -182,6 +197,7 @@ void BeginShaft()
     lastOreGainDepth = 0;
     noOreTicks = 0;
     stuckRetries = 0;
+    ascendRetries = 0;
 
     shaftContactDepth = -1;
 
@@ -248,18 +264,31 @@ void StApproaching(bool entry)
 /// True if solid material lies within reach down the shaft, or if we could not
 /// tell. Never returns false on a failed or unavailable scan — refusing to mine
 /// because a camera was busy would be far worse than digging one dry hole.
+///
+/// "Within reach" has to mean exactly what the descent means by it, which is
+/// <see cref="EffectiveDepthLimit"/>'s pre-contact bound: the job's own depth,
+/// measured from the plane. An earlier version also required the rock to start
+/// within 8 m of the plane, which contradicted the descent logic outright — that
+/// tolerates a surface tens of metres down and is written to do so — and the
+/// disagreement was expensive rather than merely untidy, because a cell rejected
+/// here is written off as Barren and never revisited. On an asteroid, where the
+/// surface wanders either side of any plane you pick, that discards good rock
+/// permanently on the strength of one raycast.
 /// </summary>
 bool ShaftHasRock(double standoff)
 {
     if (cameras.Count == 0) return true;
 
-    double reach = standoff + Math.Min(shaftDepthLimit, 60.0);
+    // Same span the ship would descend before giving up. Longer than the old
+    // reach, so a camera is more often short of charge for it — which lands on
+    // the safe answer below, not a wrong one.
+    double reach = standoff + job.Depth;
 
     double hit;
     if (!TryScanAhead(reach, out hit)) return true;   // no camera had charge
 
     if (hit < 0) return false;                        // scanned, genuinely empty
-    return hit <= standoff + 8.0;                     // rock starts about where expected
+    return hit <= reach;                              // rock anywhere we would dig
 }
 
 /// <summary>Write off a cell that turned out to be open space and move on.</summary>

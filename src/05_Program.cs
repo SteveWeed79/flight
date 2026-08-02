@@ -124,7 +124,6 @@ void Watchdog()
     {
         // A hung shaft is almost always a stuck ship. Back out and blacklist.
         case MinerState.Descending:
-        case MinerState.Ascending:
             MarkCellStuck();
             // Must be set explicitly. FinishShaft reads pendingResult when the
             // ship clears the hole, and without this it would read whatever the
@@ -132,6 +131,26 @@ void Watchdog()
             // even reach as completed, or worse, as unfinished and worth
             // retrying forever.
             pendingResult = ShaftResult.Stuck;
+            ascendRetries = 0;
+            SetState(MinerState.Ascending);
+            break;
+
+        // A hung *ascent* is the one case re-entry cannot fix. Sending Ascending
+        // back to Ascending resets this very watchdog (SetState rearms even on a
+        // self-transition), so a ship wedged in its own hole would retry until
+        // the world was reloaded, marking the same cell stuck on every lap. One
+        // more attempt is worth having — a snagged ascent sometimes frees itself
+        // once the drills are restarted — and then it has to stop and say so.
+        case MinerState.Ascending:
+            if (ascendRetries >= 1)
+            {
+                EnterFault("Unable to withdraw from shaft");
+                break;
+            }
+            ascendRetries++;
+            MarkCellStuck();
+            pendingResult = ShaftResult.Stuck;
+            Log("Ascent retry " + ascendRetries);
             SetState(MinerState.Ascending);
             break;
 
@@ -181,6 +200,7 @@ void ClearFault()
     faultReason = "";
     stuckRetries = 0;
     dockRetries = 0;
+    ascendRetries = 0;
     SetState(MinerState.Idle);
     Log("Fault cleared");
 }

@@ -145,6 +145,10 @@ int stuckRetries;
 /// counter meant a ship that had struggled in a shaft would fault on its first
 /// docking hiccup instead of getting its three attempts.</summary>
 int dockRetries;
+/// <summary>Watchdog timeouts survived while trying to climb out of a shaft.
+/// Bounds the one state that cannot recover by being re-entered: withdrawing is
+/// already the escape route, so a hung ascent has nowhere better to be sent.</summary>
+int ascendRetries;
 /// <summary>Latches once inside the slow zone, so the mating run does not
 /// oscillate between approach and docking speed at the boundary.</summary>
 bool dockNearZone;

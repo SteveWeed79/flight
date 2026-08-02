@@ -178,8 +178,17 @@ void LoadLifecycle(string[] f)
     state = saved == MinerState.Fault ? MinerState.Fault : MinerState.Idle;
     stateEntry = true;
 
+    // Idling is not enough on its own. StIdle launches the moment it sees
+    // jobRunning, so restoring that flag as true means the ship undocks by
+    // itself on the first tick after a recompile or a server restart — the
+    // exact opposite of what the paragraph above promises, and it does it while
+    // the operator is still reading the config they just changed. The run flag
+    // is the operator's, and it does not survive a reload.
     if (saved != MinerState.Idle && saved != MinerState.Fault)
+    {
+        jobRunning = false;
         Log("Resumed from " + saved + " — idling, run 'start' to continue");
+    }
 }
 
 void LoadLearned(string[] f)
