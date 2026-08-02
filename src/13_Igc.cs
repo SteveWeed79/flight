@@ -518,3 +518,16 @@ static string Sanitize(string s)
     if (string.IsNullOrEmpty(s)) return "?";
     return s.Replace('|', '/').Replace(',', ' ');
 }
+
+/// <summary>
+/// As above, plus the line breaks and the length cap that the Storage format
+/// needs. Storage is line delimited, and the text that most wants sanitising
+/// here is an exception message — which is exactly the kind of string that
+/// arrives with a newline in the middle of it and silently truncates the record.
+/// </summary>
+static string Sanitize(string s, int max)
+{
+    if (string.IsNullOrEmpty(s)) return "?";
+    string clean = Sanitize(s).Replace('\n', ' ').Replace('\r', ' ');
+    return clean.Length > max ? clean.Substring(0, max) : clean;
+}

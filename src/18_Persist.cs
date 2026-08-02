@@ -36,6 +36,18 @@ string SerializeState()
      .Append('|').Append(EncD(hydroCalibrated ? hydroPerMetre * 1000.0 : 0))
      .Append('\n');
 
+    // A preserved fault with no reason attached is a ship that refuses to work
+    // and will not say why — the operator's only remaining move is to clear it
+    // blind and watch whether it happens again. The reason travels with it.
+    if (state == MinerState.Fault && faultReason.Length > 0)
+    {
+        b.Append("F|").Append(Sanitize(faultReason, 80))
+         .Append('|').Append((int)faultState)
+         .Append('|').Append(faultCell)
+         .Append('|').Append((long)Math.Max(0, faultAt))
+         .Append('\n');
+    }
+
     if (job.IsSet)
     {
         // Same eight fields, same order, same encoder as the IGC beacon. One
@@ -123,6 +135,11 @@ void LoadState()
                     LoadLearned(f);
                     break;
 
+                case "F":
+                    if (!versionOk || f.Length < 5) break;
+                    LoadFault(f);
+                    break;
+
                 case "J":
                     if (!versionOk || f.Length < 9) break;
                     LoadJob(f);
@@ -189,6 +206,30 @@ void LoadLifecycle(string[] f)
         jobRunning = false;
         Log("Resumed from " + saved + " — idling, run 'start' to continue");
     }
+}
+
+/// <summary>
+/// Restore the explanation for a fault that survived a reload.
+///
+/// Only ever applied to a ship that came up faulted. A stale F record against a
+/// running ship would be worse than none: an operator reading a fault banner for
+/// something that was cleared two sessions ago will go looking for a problem
+/// that is not there.
+/// </summary>
+void LoadFault(string[] f)
+{
+    if (state != MinerState.Fault) return;
+
+    faultReason = f[1];
+    faultState = (MinerState)ParseInt(f[2], 0);
+    faultCell = ParseInt(f[3], -1);
+
+    // The saved reading belongs to the previous session's clock, which restarted
+    // at zero with this one. Kept out of faultAt, where anything subtracting it
+    // from the current clock would produce a confident and meaningless age, and
+    // reported once in the log where it can be read for what it is.
+    faultAt = -1;
+    Log("Faulted before reload at " + f[4] + "s in " + faultState + ": " + faultReason);
 }
 
 void LoadLearned(string[] f)

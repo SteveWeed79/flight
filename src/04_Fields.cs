@@ -6,6 +6,14 @@
 string configError = "";
 string statusLine = "Booting";
 string faultReason = "";
+/// <summary>State the ship was in when the fault was raised. Kept because Fault
+/// itself says nothing about what was being attempted at the time.</summary>
+MinerState faultState = MinerState.Idle;
+/// <summary>Cell being worked when the fault was raised, -1 = none.</summary>
+int faultCell = -1;
+/// <summary>Clock reading when the fault was raised, seconds since compile.
+/// Negative means no fault has been raised in this session.</summary>
+double faultAt = -1;
 readonly List<string> log = new List<string>();
 const int LOG_MAX = 12;
 

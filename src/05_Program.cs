@@ -21,6 +21,9 @@ public Program()
         // A crash in the constructor leaves a block that looks alive and does
         // nothing. Make it loud instead.
         faultReason = "Boot failed: " + e.Message;
+        faultState = state;
+        faultCell = activeCell;
+        faultAt = clock;
         state = MinerState.Fault;
     }
 }
@@ -182,6 +185,13 @@ void EnterFault(string why)
 {
     if (state == MinerState.Fault) return;
     faultReason = why;
+    // Captured before the state changes: Fault on its own does not say what the
+    // ship was trying to do, and by the time anyone reads this the log that
+    // would have said so may have rolled over — or been thrown away by a
+    // reload, which is exactly when a preserved fault is all there is to go on.
+    faultState = state;
+    faultCell = activeCell;
+    faultAt = clock;
     Log("FAULT: " + why);
     state = MinerState.Fault;
     stateEnteredAt = clock;
@@ -198,6 +208,9 @@ void EnterFault(string why)
 void ClearFault()
 {
     faultReason = "";
+    faultState = MinerState.Idle;
+    faultCell = -1;
+    faultAt = -1;
     stuckRetries = 0;
     dockRetries = 0;
     ascendRetries = 0;

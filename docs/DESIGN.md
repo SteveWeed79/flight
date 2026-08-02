@@ -371,8 +371,13 @@ babysit:
   the control loop has no history. It comes up idle *and stopped* — the run flag
   does not survive a reload from a flying state either, since coming up idle with
   it still set means launching on the next tick, which is the same thing with an
-  extra step — and waits to be told to continue. A fault, by contrast, is preserved, because whatever caused it
-  probably has not fixed itself.
+  extra step — and waits to be told to continue.
+- **A fault is preserved, and so is its reason.** Whatever caused it probably has
+  not fixed itself. The reason, the state the ship was in and the cell it was
+  working are all written to Storage, because a preserved fault with no
+  explanation attached leaves the operator nothing to do but clear it blind and
+  wait to see whether it happens again. The same message means very different
+  things raised while docking and raised at the bottom of a shaft.
 - **Integers on the wire.** Every number in an inter-grid message is an integer
   scaled by 1000. A script that writes `"12.5"` and is read by a client whose
   locale uses a comma decimal separator parses it as `125`, and a drone that

@@ -35,7 +35,17 @@ void Render(bool force = false)
 
     if (state == MinerState.Fault)
     {
-        sb.Append("\n*** FAULT ***\n").Append(faultReason).Append("\n\n");
+        sb.Append("\n*** FAULT ***\n").Append(faultReason).Append('\n');
+        // What it was doing at the time. Survives a reload with the reason, and
+        // is often the whole diagnosis on its own — the same message means very
+        // different things raised while docking and raised down a shaft.
+        if (faultState != MinerState.Idle)
+        {
+            sb.Append("while ").Append(faultState);
+            if (faultCell >= 0) sb.Append(" at ").Append(CellLabel(faultCell));
+            sb.Append('\n');
+        }
+        sb.Append('\n');
         sb.Append("Run 'clear' once the cause is fixed.\n");
     }
 

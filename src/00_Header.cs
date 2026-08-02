@@ -51,4 +51,4 @@
  *//////////////////////////////////////////////////////////////////////////////
 
 const string VEIN_VERSION = "1.1.0";
-const string STORAGE_REV  = "4";   // bump on ANY change to a persisted enum or field order
+const string STORAGE_REV  = "5";   // bump on ANY change to a persisted enum or field order
