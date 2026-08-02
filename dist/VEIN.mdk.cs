@@ -73,7 +73,7 @@ namespace VEIN
          *//////////////////////////////////////////////////////////////////////////////
 
         const string VEIN_VERSION = "1.1.0";
-        const string STORAGE_REV  = "4";   // bump on ANY change to a persisted enum or field order
+        const string STORAGE_REV  = "5";   // bump on ANY change to a persisted enum or field order
         #endregion
 
         #region 01_Enums.cs
@@ -294,6 +294,13 @@ namespace VEIN
             public float DepthReached;
             /// <summary>Which drone holds this cell, 0 = nobody.</summary>
             public long LeasedBy;
+            /// <summary>
+            /// Which *grant* the holder is working under, 0 = none. Monotonic per
+            /// dispatcher, so two successive leases on the same cell to the same drone
+            /// are still distinguishable — an address alone cannot tell them apart, and
+            /// that is exactly the case a lease that expired and was reissued produces.
+            /// </summary>
+            public long LeaseId;
             /// <summary>Clock reading, in seconds, at which an unrenewed lease expires.
             /// Zero means no lease. Absolute, so a lag spike cannot move it.</summary>
             public double LeaseExpiresAt;
@@ -720,6 +727,14 @@ namespace VEIN
         string configError = "";
         string statusLine = "Booting";
         string faultReason = "";
+        /// <summary>State the ship was in when the fault was raised. Kept because Fault
+        /// itself says nothing about what was being attempted at the time.</summary>
+        MinerState faultState = MinerState.Idle;
+        /// <summary>Cell being worked when the fault was raised, -1 = none.</summary>
+        int faultCell = -1;
+        /// <summary>Clock reading when the fault was raised, seconds since compile.
+        /// Negative means no fault has been raised in this session.</summary>
+        double faultAt = -1;
         readonly List<string> log = new List<string>();
         const int LOG_MAX = 12;
 
@@ -951,6 +966,11 @@ namespace VEIN
         readonly Dictionary<int, long> dockSlotOwner = new Dictionary<int, long>();
         /// <summary>Tick we last asked the dispatcher for something, for retry backoff.</summary>
         long lastRequestTick;
+        /// <summary>Miner: the grant our current shaft is being dug under, echoed back
+        /// in the report so the dispatcher can tell it from a later one. 0 = none.</summary>
+        long activeLeaseId;
+        /// <summary>Dispatcher: source of lease ids. Only ever increments.</summary>
+        long nextLeaseId;
 
         // ---- Scouting -------------------------------------------------------------
         /// <summary>True once we have confirmed the Ore Detector Raycast mod responds.</summary>
@@ -994,6 +1014,9 @@ namespace VEIN
                 // A crash in the constructor leaves a block that looks alive and does
                 // nothing. Make it loud instead.
                 faultReason = "Boot failed: " + e.Message;
+                faultState = state;
+                faultCell = activeCell;
+                faultAt = clock;
                 state = MinerState.Fault;
             }
         }
@@ -1155,6 +1178,13 @@ namespace VEIN
         {
             if (state == MinerState.Fault) return;
             faultReason = why;
+            // Captured before the state changes: Fault on its own does not say what the
+            // ship was trying to do, and by the time anyone reads this the log that
+            // would have said so may have rolled over — or been thrown away by a
+            // reload, which is exactly when a preserved fault is all there is to go on.
+            faultState = state;
+            faultCell = activeCell;
+            faultAt = clock;
             Log("FAULT: " + why);
             state = MinerState.Fault;
             stateEnteredAt = clock;
@@ -1171,6 +1201,9 @@ namespace VEIN
         void ClearFault()
         {
             faultReason = "";
+            faultState = MinerState.Idle;
+            faultCell = -1;
+            faultAt = -1;
             stuckRetries = 0;
             dockRetries = 0;
             ascendRetries = 0;
@@ -2872,6 +2905,7 @@ namespace VEIN
             cell.MetresDrilled += (float)metres;
             cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
             cell.LeasedBy = 0;
+            cell.LeaseId = 0;
             cell.LeaseExpiresAt = 0;
 
             switch (result)
@@ -4497,7 +4531,8 @@ namespace VEIN
             if (dispatcherAddr == 0) return;
             string body = "SR|" + cellIdx + "|" + (int)result
                         + "|" + EncD(oreKg) + "|" + EncD(metres)
-                        + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0);
+                        + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0)
+                        + "|" + activeLeaseId;
             IGC.SendUnicastMessage(dispatcherAddr, igcChannel, body);
         }
 
@@ -4536,6 +4571,9 @@ namespace VEIN
             if (activeCell < 0 || activeCell >= cells.Length) return;
             if (cells[activeCell].State == CellState.Leased) cells[activeCell].State = CellState.Unknown;
             cells[activeCell].LeasedBy = 0;
+            // Our copy of the grant goes with it. A report sent after this point would
+            // carry an id the dispatcher has already retired, which is the point.
+            activeLeaseId = 0;
         }
 
         // ---------------------------------------------------------------------------
@@ -4598,10 +4636,10 @@ namespace VEIN
             return true;
         }
 
-        void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane)
+        void GrantLease(long to, int cellIdx, double depthLimit, bool isProbe, double lane, long leaseId)
         {
             string body = "LG|" + cellIdx + "|" + EncD(depthLimit)
-                        + "|" + (isProbe ? 1 : 0) + "|" + EncD(lane);
+                        + "|" + (isProbe ? 1 : 0) + "|" + EncD(lane) + "|" + leaseId;
             IGC.SendUnicastMessage(to, igcChannel, body);
         }
 
@@ -4746,21 +4784,23 @@ namespace VEIN
 
             cells[cell].State = CellState.Leased;
             cells[cell].LeasedBy = src;
+            cells[cell].LeaseId = ++nextLeaseId;
             cells[cell].LeaseExpiresAt = clock + droneTimeout * 2;
             r.LeasedCell = cell;
 
             double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
-            GrantLease(src, cell, limit, shaftIsProbe, r.Lane);
+            GrantLease(src, cell, limit, shaftIsProbe, r.Lane, cells[cell].LeaseId);
         }
 
         void OnLeaseGrant(long src, string[] f)
         {
-            if (role != Role.Miner || f.Length < 5) return;
+            if (role != Role.Miner || f.Length < 6) return;
 
             activeCell = ParseInt(f[1], -1);
             shaftDepthLimit = DecD(f[2]);
             shaftIsProbe = f[3] == "1";
             myLane = DecD(f[4]);
+            activeLeaseId = ParseLong(f[5], 0);
 
             if (activeCell >= 0 && activeCell < cells.Length)
                 cells[activeCell].State = CellState.Leased;
@@ -4791,15 +4831,31 @@ namespace VEIN
 
         void OnShaftReport(long src, string[] f)
         {
-            if (role != Role.Dispatcher || f.Length < 7) return;
+            if (role != Role.Dispatcher || f.Length < 8) return;
 
             int idx = ParseInt(f[1], -1);
             if (idx < 0 || idx >= cells.Length) return;
 
-            // Only the drone that holds the lease may report on it. Without this a
-            // stale message from a drone whose lease already expired would overwrite
-            // the result of whoever is digging that cell now.
-            if (cells[idx].LeasedBy != 0 && cells[idx].LeasedBy != src) return;
+            // Only the drone holding this exact lease may report on it.
+            //
+            // The address on its own was not enough, in two directions. It let a report
+            // through whenever the cell was unowned — which is precisely the state an
+            // expired lease leaves behind — so the stale message this check exists to
+            // stop was accepted rather than rejected. And because RecordShaftResult
+            // clears the holder, it also let a duplicated message through a second time,
+            // adding the same ore and the same metres to the map twice.
+            //
+            // Matching the grant closes both. The id is issued once, echoed back once,
+            // and cleared when the lease ends, so a report is accepted exactly when it
+            // describes the lease the cell is under right now.
+            long reported = ParseLong(f[7], 0);
+            if (cells[idx].LeaseId == 0 || cells[idx].LeaseId != reported || cells[idx].LeasedBy != src)
+            {
+                // Worth a line: a drone reporting under a dead lease has lost real
+                // drilling, and silence would make that look like a cell nobody touched.
+                Log("Ignored stale report on " + CellLabel(idx));
+                return;
+            }
 
             ShaftResult result = (ShaftResult)ParseInt(f[2], 0);
             RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
@@ -4868,6 +4924,19 @@ namespace VEIN
             if (string.IsNullOrEmpty(s)) return "?";
             return s.Replace('|', '/').Replace(',', ' ');
         }
+
+        /// <summary>
+        /// As above, plus the line breaks and the length cap that the Storage format
+        /// needs. Storage is line delimited, and the text that most wants sanitising
+        /// here is an exception message — which is exactly the kind of string that
+        /// arrives with a newline in the middle of it and silently truncates the record.
+        /// </summary>
+        static string Sanitize(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return "?";
+            string clean = Sanitize(s).Replace('\n', ' ').Replace('\r', ' ');
+            return clean.Length > max ? clean.Substring(0, max) : clean;
+        }
         #endregion
 
         #region 14_Dispatcher.cs
@@ -4919,6 +4988,7 @@ namespace VEIN
                 Log("Lease on " + CellLabel(i) + " expired — reissuing");
                 c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
                 c.LeasedBy = 0;
+                c.LeaseId = 0;
                 c.LeaseExpiresAt = 0;
             }
         }
@@ -4948,6 +5018,8 @@ namespace VEIN
                     {
                         c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
                         c.LeasedBy = 0;
+                        c.LeaseId = 0;
+                        c.LeaseExpiresAt = 0;
                     }
                 }
 
@@ -5149,6 +5221,12 @@ namespace VEIN
             return int.TryParse(s, out v) ? v : fallback;
         }
 
+        static long ParseLong(string s, long fallback)
+        {
+            long v;
+            return long.TryParse(s, out v) ? v : fallback;
+        }
+
         static double ParseDouble(string s, double fallback)
         {
             // Operator input, so it may genuinely contain a decimal point. Parse the
@@ -5227,7 +5305,17 @@ namespace VEIN
 
             if (state == MinerState.Fault)
             {
-                sb.Append("\n*** FAULT ***\n").Append(faultReason).Append("\n\n");
+                sb.Append("\n*** FAULT ***\n").Append(faultReason).Append('\n');
+                // What it was doing at the time. Survives a reload with the reason, and
+                // is often the whole diagnosis on its own — the same message means very
+                // different things raised while docking and raised down a shaft.
+                if (faultState != MinerState.Idle)
+                {
+                    sb.Append("while ").Append(faultState);
+                    if (faultCell >= 0) sb.Append(" at ").Append(CellLabel(faultCell));
+                    sb.Append('\n');
+                }
+                sb.Append('\n');
                 sb.Append("Run 'clear' once the cause is fixed.\n");
             }
 
@@ -5720,6 +5808,18 @@ namespace VEIN
              .Append('|').Append(EncD(hydroCalibrated ? hydroPerMetre * 1000.0 : 0))
              .Append('\n');
 
+            // A preserved fault with no reason attached is a ship that refuses to work
+            // and will not say why — the operator's only remaining move is to clear it
+            // blind and watch whether it happens again. The reason travels with it.
+            if (state == MinerState.Fault && faultReason.Length > 0)
+            {
+                b.Append("F|").Append(Sanitize(faultReason, 80))
+                 .Append('|').Append((int)faultState)
+                 .Append('|').Append(faultCell)
+                 .Append('|').Append((long)Math.Max(0, faultAt))
+                 .Append('\n');
+            }
+
             if (job.IsSet)
             {
                 // Same eight fields, same order, same encoder as the IGC beacon. One
@@ -5807,6 +5907,11 @@ namespace VEIN
                             LoadLearned(f);
                             break;
 
+                        case "F":
+                            if (!versionOk || f.Length < 5) break;
+                            LoadFault(f);
+                            break;
+
                         case "J":
                             if (!versionOk || f.Length < 9) break;
                             LoadJob(f);
@@ -5873,6 +5978,30 @@ namespace VEIN
                 jobRunning = false;
                 Log("Resumed from " + saved + " — idling, run 'start' to continue");
             }
+        }
+
+        /// <summary>
+        /// Restore the explanation for a fault that survived a reload.
+        ///
+        /// Only ever applied to a ship that came up faulted. A stale F record against a
+        /// running ship would be worse than none: an operator reading a fault banner for
+        /// something that was cleared two sessions ago will go looking for a problem
+        /// that is not there.
+        /// </summary>
+        void LoadFault(string[] f)
+        {
+            if (state != MinerState.Fault) return;
+
+            faultReason = f[1];
+            faultState = (MinerState)ParseInt(f[2], 0);
+            faultCell = ParseInt(f[3], -1);
+
+            // The saved reading belongs to the previous session's clock, which restarted
+            // at zero with this one. Kept out of faultAt, where anything subtracting it
+            // from the current clock would produce a confident and meaningless age, and
+            // reported once in the log where it can be read for what it is.
+            faultAt = -1;
+            Log("Faulted before reload at " + f[4] + "s in " + faultState + ": " + faultReason);
         }
 
         void LoadLearned(string[] f)

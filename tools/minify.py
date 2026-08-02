@@ -189,10 +189,24 @@ KEYWORDS = {
 
 WORD = re.compile(r"[A-Za-z0-9_]")
 
-# Pairs that must never be created by deleting the whitespace between them. The
-# first two would start a comment and swallow the rest of the script; the last
-# three change the arithmetic.
-WELDS = {"//", "/*", "*/", "--", "++"}
+# Pairs that must never be created by deleting the whitespace between them.
+#
+#   //  /*  */   start a comment and swallow the rest of the script
+#   --  ++       change the arithmetic
+#   >>           closes two nested generics as a shift: List<List<int> >
+#   ?.            a ternary onto a leading-decimal literal, `c ? .5 : 1`,
+#                 becomes the null-conditional operator
+#
+# The last two do not occur in the source today. They are here because the cost
+# of listing a pair that never arises is nothing, and the cost of omitting one
+# that does is a script that minifies without complaint and misbehaves in game.
+#
+# Not a general C# tokeniser, and does not pretend to be: the other welds that
+# get suggested for this list — `< <`, `& &`, `| |`, `= >` — cannot be produced
+# by valid C# with whitespace in the middle, so adding them would buy nothing.
+# The real backstop is the verification pass, which checks the output rather
+# than reasoning about the input.
+WELDS = {"//", "/*", "*/", "--", "++", ">>", "?."}
 
 
 def squeeze(segments):

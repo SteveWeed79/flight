@@ -1,0 +1,64 @@
+# What this checks, and the one thing it deliberately does not.
+#
+# validate.py is a structural check over the modules — cross-module calls that
+# nothing defines, duplicate declarations, and so on. It is not a type checker
+# and never claimed to be. The drift job is the other half of its value: the
+# in-game script is the built artefact in dist/, so a source change that never
+# reached dist/ is a change nobody is running.
+#
+# NOT here: a real compile against the Space Engineers assemblies, which is the
+# only thing that catches a wrong API member name, a bad overload or a
+# whitelist violation. The pieces exist — dist/VEIN.mdk.cs is already a complete
+# compilation unit, and the reference assemblies ship as the Mal.Mdk2.References
+# NuGet package — but the target framework is .NET Framework, so a Linux runner
+# needs Microsoft.NETFramework.ReferenceAssemblies as well, or the job needs a
+# windows runner. That was not verifiable where this workflow was written, and a
+# compile gate guessed at is worse than an absent one: it fails on things that
+# are fine and teaches everyone to ignore it. Adding it is the next job here.
+
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Structural check
+        run: python3 tools/validate.py
+
+      - name: Build
+        run: python3 tools/build.py
+
+      - name: Minify
+        run: python3 tools/minify.py
+
+      - name: dist/ is in step with src/
+        run: |
+          if ! git diff --quiet -- dist/; then
+            echo "::error::dist/ does not match a fresh build of src/. Run tools/build.py and tools/minify.py and commit the result."
+            git diff --stat -- dist/
+            exit 1
+          fi
+          echo "dist/ matches a fresh build"
+
+      - name: Fits the in-game editor
+        run: |
+          chars=$(wc -c < dist/VEIN.min.cs)
+          echo "dist/VEIN.min.cs is $chars chars"
+          # The minifier already enforces its own target and fails if it cannot
+          # reach it. This is the backstop for the hard limit itself, so a change
+          # to MARGIN cannot quietly ship a script the editor will not take.
+          if [ "$chars" -gt 100000 ]; then
+            echo "::error::minified script is over the 100000 char editor limit"
+            exit 1
+          fi
