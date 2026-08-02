@@ -273,8 +273,9 @@ public class YieldCell
     public float DepthReached;
     /// <summary>Which drone holds this cell, 0 = nobody.</summary>
     public long LeasedBy;
-    /// <summary>Tick at which an unrenewed lease expires.</summary>
-    public long LeaseExpiresTick;
+    /// <summary>Clock reading, in seconds, at which an unrenewed lease expires.
+    /// Zero means no lease. Absolute, so a lag spike cannot move it.</summary>
+    public double LeaseExpiresAt;
     /// <summary>How many times a ship got stuck here. 3 strikes and it's Blocked.</summary>
     public int StuckCount;
 
@@ -305,8 +306,9 @@ public class DroneRecord
     public float CargoFill;
     public float Battery;
     public Vector3D Position;
-    /// <summary>Last tick we heard from it. Silence past a timeout = presumed dead.</summary>
-    public long LastSeenTick;
+    /// <summary>Clock reading of the last message from it, in seconds. Silence
+    /// past a timeout = presumed dead.</summary>
+    public double LastSeenAt;
     /// <summary>Cell it currently holds, -1 if none.</summary>
     public int LeasedCell = -1;
     /// <summary>Dock slot it holds, -1 if none.</summary>
@@ -836,6 +838,10 @@ int stuckRetries;
 /// counter meant a ship that had struggled in a shaft would fault on its first
 /// docking hiccup instead of getting its three attempts.</summary>
 int dockRetries;
+/// <summary>Watchdog timeouts survived while trying to climb out of a shaft.
+/// Bounds the one state that cannot recover by being re-entered: withdrawing is
+/// already the escape route, so a hung ascent has nowhere better to be sent.</summary>
+int ascendRetries;
 /// <summary>Latches once inside the slow zone, so the mating run does not
 /// oscillate between approach and docking speed at the boundary.</summary>
 bool dockNearZone;
@@ -882,8 +888,20 @@ double[] pathCumulative = new double[0];
 
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
-/// <summary>Ticks spent in the current state. Watchdog input.</summary>
-int stateTicks;
+/// <summary>
+/// Value of <see cref="clock"/> when the current state was entered. Watchdog
+/// input, and the pattern every other deadline in the script follows.
+///
+/// Counting ticks and multiplying by the latest dt was wrong in a way that only
+/// showed up when it mattered: dt is the length of the *last* tick, so a lag
+/// spike or a simulation-speed drop retroactively rescaled every deadline
+/// already in flight. With dt clamped to [0.008, 0.5] that is a threefold error
+/// against the nominal 10-tick cadence, in whichever direction hurts most — a
+/// watchdog that fires early on a ship that is merely slow, or late on one that
+/// is genuinely wedged. An absolute deadline on an accumulated clock cannot be
+/// moved after the fact by anything that happens later.
+/// </summary>
+double stateEnteredAt;
 /// <summary>True only on the first tick of a state. Where per-state setup happens.</summary>
 bool stateEntry = true;
 /// <summary>Set when the operator has asked for work; cleared by "stop".</summary>
@@ -900,7 +918,8 @@ IMyBroadcastListener listener;
 IMyUnicastListener unicast;
 /// <summary>Dispatcher address if we have found one, 0 otherwise.</summary>
 long dispatcherAddr;
-long lastDispatcherSeenTick;
+/// <summary>Clock reading of the last beacon we heard, in seconds.</summary>
+double lastDispatcherSeenAt;
 /// <summary>Dispatcher: everyone who has checked in.</summary>
 readonly Dictionary<long, DroneRecord> fleet = new Dictionary<long, DroneRecord>();
 /// <summary>Miner: our assigned altitude lane over the site, metres.</summary>
@@ -1026,12 +1045,12 @@ void SetState(MinerState next)
 {
     if (state == next)
     {
-        stateTicks = 0;
+        stateEnteredAt = clock;
         stateEntry = true;
         return;
     }
     state = next;
-    stateTicks = 0;
+    stateEnteredAt = clock;
     stateEntry = true;
     stuckTicks = 0;
 }
@@ -1049,7 +1068,7 @@ void Watchdog()
     // Servicing legitimately takes as long as the batteries take.
     if (state == MinerState.Servicing) return;
 
-    if (stateTicks * dt < stateTimeout) return;
+    if (clock - stateEnteredAt < stateTimeout) return;
 
     Log("Watchdog: " + state + " ran over " + Fmt(stateTimeout, 0) + "s");
 
@@ -1057,7 +1076,6 @@ void Watchdog()
     {
         // A hung shaft is almost always a stuck ship. Back out and blacklist.
         case MinerState.Descending:
-        case MinerState.Ascending:
             MarkCellStuck();
             // Must be set explicitly. FinishShaft reads pendingResult when the
             // ship clears the hole, and without this it would read whatever the
@@ -1065,6 +1083,26 @@ void Watchdog()
             // even reach as completed, or worse, as unfinished and worth
             // retrying forever.
             pendingResult = ShaftResult.Stuck;
+            ascendRetries = 0;
+            SetState(MinerState.Ascending);
+            break;
+
+        // A hung *ascent* is the one case re-entry cannot fix. Sending Ascending
+        // back to Ascending resets this very watchdog (SetState rearms even on a
+        // self-transition), so a ship wedged in its own hole would retry until
+        // the world was reloaded, marking the same cell stuck on every lap. One
+        // more attempt is worth having — a snagged ascent sometimes frees itself
+        // once the drills are restarted — and then it has to stop and say so.
+        case MinerState.Ascending:
+            if (ascendRetries >= 1)
+            {
+                EnterFault("Unable to withdraw from shaft");
+                break;
+            }
+            ascendRetries++;
+            MarkCellStuck();
+            pendingResult = ShaftResult.Stuck;
+            Log("Ascent retry " + ascendRetries);
             SetState(MinerState.Ascending);
             break;
 
@@ -1098,7 +1136,7 @@ void EnterFault(string why)
     faultReason = why;
     Log("FAULT: " + why);
     state = MinerState.Fault;
-    stateTicks = 0;
+    stateEnteredAt = clock;
     // Entry tick must fire. SafeStop is called below as well, but a state that
     // never sees stateEntry is a trap for anything added to StFault later.
     stateEntry = true;
@@ -1114,6 +1152,7 @@ void ClearFault()
     faultReason = "";
     stuckRetries = 0;
     dockRetries = 0;
+    ascendRetries = 0;
     SetState(MinerState.Idle);
     Log("Fault cleared");
 }
@@ -2812,7 +2851,7 @@ void RecordShaftResult(int idx, ShaftResult result, double oreKg, double metres,
     cell.MetresDrilled += (float)metres;
     cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
     cell.LeasedBy = 0;
-    cell.LeaseExpiresTick = 0;
+    cell.LeaseExpiresAt = 0;
 
     switch (result)
     {
@@ -3188,8 +3227,6 @@ void BeginPath(bool outbound)
 
 void TickMiner()
 {
-    stateTicks++;
-
     if (recording) RecordTick();
 
     CheckDamage();
@@ -3233,6 +3270,14 @@ void StIdle(bool entry)
 {
     if (entry) { SafeStop(); ReleaseAirspace(); statusLine = "Idle"; }
     if (!jobRunning || jobComplete) return;
+
+    // A fleet drone launches on the dispatcher's word, not its own. Without
+    // this, a drone that had just come home *because* the dispatcher went quiet
+    // would take off again immediately, fly to the site, find nobody to lease
+    // from, and come back — a round trip's worth of hydrogen per lap, for as
+    // long as the outage lasts. Waiting on the pad costs nothing and resumes by
+    // itself the moment a beacon arrives.
+    if (DispatcherSilent) { statusLine = "Waiting for dispatcher"; return; }
 
     Health h = CheckReadiness();
     if (!h.Ok) { statusLine = "Not ready: " + h.Detail; return; }
@@ -3321,14 +3366,21 @@ void StSelecting(bool entry)
 
         if (activeCell >= 0) { awaitingLease = false; BeginShaft(); return; }
 
-        // Retry, then fall back. A dispatcher that has stopped answering must not
-        // be able to park the whole fleet indefinitely.
+        // Retry, then go home. A dispatcher that has stopped answering must not
+        // be able to park the whole fleet in mid-air — but the fix for that is
+        // not to promote every survivor to solo mining, which is what this used
+        // to do. See DispatcherSilent: solo ships skip the airspace mutex, so
+        // that turned one dead dispatcher into several drones digging the same
+        // deposit with no exclusion between them. The shaft already in hand is
+        // always finished first; this branch only ever runs between shafts.
         if (tick - lastRequestTick > 60)
         {
-            if (tick - lastDispatcherSeenTick > (long)(droneTimeout / Math.Max(dt, 0.01)))
+            if (DispatcherSilent)
             {
-                Log("Dispatcher lost — continuing solo");
-                dispatcherAddr = 0;
+                Log("Dispatcher silent — returning to base");
+                awaitingLease = false;
+                SetState(MinerState.Inbound);
+                return;
             }
             awaitingLease = false;
         }
@@ -3361,6 +3413,7 @@ void BeginShaft()
     lastOreGainDepth = 0;
     noOreTicks = 0;
     stuckRetries = 0;
+    ascendRetries = 0;
 
     shaftContactDepth = -1;
 
@@ -3427,18 +3480,31 @@ void StApproaching(bool entry)
 /// True if solid material lies within reach down the shaft, or if we could not
 /// tell. Never returns false on a failed or unavailable scan — refusing to mine
 /// because a camera was busy would be far worse than digging one dry hole.
+///
+/// "Within reach" has to mean exactly what the descent means by it, which is
+/// <see cref="EffectiveDepthLimit"/>'s pre-contact bound: the job's own depth,
+/// measured from the plane. An earlier version also required the rock to start
+/// within 8 m of the plane, which contradicted the descent logic outright — that
+/// tolerates a surface tens of metres down and is written to do so — and the
+/// disagreement was expensive rather than merely untidy, because a cell rejected
+/// here is written off as Barren and never revisited. On an asteroid, where the
+/// surface wanders either side of any plane you pick, that discards good rock
+/// permanently on the strength of one raycast.
 /// </summary>
 bool ShaftHasRock(double standoff)
 {
     if (cameras.Count == 0) return true;
 
-    double reach = standoff + Math.Min(shaftDepthLimit, 60.0);
+    // Same span the ship would descend before giving up. Longer than the old
+    // reach, so a camera is more often short of charge for it — which lands on
+    // the safe answer below, not a wrong one.
+    double reach = standoff + job.Depth;
 
     double hit;
     if (!TryScanAhead(reach, out hit)) return true;   // no camera had charge
 
     if (hit < 0) return false;                        // scanned, genuinely empty
-    return hit <= standoff + 8.0;                     // rock starts about where expected
+    return hit <= reach;                              // rock anywhere we would dig
 }
 
 /// <summary>Write off a cell that turned out to be open space and move on.</summary>
@@ -4357,6 +4423,28 @@ void HandleMessage(long src, string body)
 
 bool HasDispatcher { get { return role == Role.Miner && dispatcherAddr != 0; } }
 
+/// <summary>
+/// True when we belong to a fleet whose dispatcher has stopped beaconing.
+///
+/// Deliberately does not clear <see cref="dispatcherAddr"/>. A drone that
+/// forgets its dispatcher stops being a fleet member in every other part of the
+/// script at once — most sharply in AcquireAirspace and AcquireDockSlot, both of
+/// which return true unconditionally for a solo ship. One dispatcher outage
+/// would therefore switch off the site mutex for every surviving drone
+/// simultaneously and leave them all self-assigning shafts from local maps that
+/// know nothing of each other's leases: several loaded miners converging on the
+/// same hole with no exclusion left between them. Staying nominally in the fleet
+/// keeps the locks in play — unanswered, so they expire into the bounded
+/// override that already exists — while the ships head home.
+/// </summary>
+bool DispatcherSilent
+{
+    get
+    {
+        return HasDispatcher && clock - lastDispatcherSeenAt > droneTimeout;
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  OUTBOUND — miner side
 // ---------------------------------------------------------------------------
@@ -4519,7 +4607,7 @@ void OnBeacon(long src, string[] f)
     // spoke last. Stay with the first one heard and say so.
     if (dispatcherAddr != 0 && dispatcherAddr != src)
     {
-        if (tick - lastDispatcherSeenTick < 600)
+        if (clock - lastDispatcherSeenAt < 60.0)
         {
             Log("Second dispatcher on channel '" + igcChannel + "' — ignoring it");
             return;
@@ -4528,7 +4616,7 @@ void OnBeacon(long src, string[] f)
     }
 
     dispatcherAddr = src;
-    lastDispatcherSeenTick = tick;
+    lastDispatcherSeenAt = clock;
 
     if (f.Length < 10 || f[1] != "1") return;
 
@@ -4616,7 +4704,7 @@ void OnHeartbeat(long src, string[] f)
     r.Battery = (float)DecD(f[4]);
     r.Position = DecV(f[5]);
     r.LeasedCell = ParseInt(f[6], -1);
-    r.LastSeenTick = tick;
+    r.LastSeenAt = clock;
 }
 
 void OnLeaseRequest(long src, string[] f)
@@ -4637,7 +4725,7 @@ void OnLeaseRequest(long src, string[] f)
 
     cells[cell].State = CellState.Leased;
     cells[cell].LeasedBy = src;
-    cells[cell].LeaseExpiresTick = tick + (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
+    cells[cell].LeaseExpiresAt = clock + droneTimeout * 2;
     r.LeasedCell = cell;
 
     double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
@@ -4776,7 +4864,6 @@ static string Sanitize(string s)
 
 void TickDispatcher()
 {
-    stateTicks++;
     statusLine = "Dispatching";
 
     if (recording) RecordTick();
@@ -4806,12 +4893,12 @@ void ExpireLeases()
     {
         YieldCell c = cells[i];
         if (c.State != CellState.Leased) continue;
-        if (c.LeaseExpiresTick == 0 || tick < c.LeaseExpiresTick) continue;
+        if (c.LeaseExpiresAt == 0 || clock < c.LeaseExpiresAt) continue;
 
         Log("Lease on " + CellLabel(i) + " expired — reissuing");
         c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
         c.LeasedBy = 0;
-        c.LeaseExpiresTick = 0;
+        c.LeaseExpiresAt = 0;
     }
 }
 
@@ -4820,14 +4907,12 @@ void ExpireDrones()
 {
     if (fleet.Count == 0) return;
 
-    long limit = (long)(droneTimeout / Math.Max(dt, 0.01));
-
     // Collect first, mutate after — removing from a dictionary mid-enumeration
     // throws, and it will throw on the exact night you are not watching.
     var lost = new List<long>();
 
     foreach (var kv in fleet)
-        if (tick - kv.Value.LastSeenTick > limit) lost.Add(kv.Key);
+        if (clock - kv.Value.LastSeenAt > droneTimeout) lost.Add(kv.Key);
 
     for (int i = 0; i < lost.Count; i++)
     {
@@ -4895,7 +4980,7 @@ DroneRecord DroneFor(long addr)
         r.Lane = fleet.Count * laneSpacing;
         fleet[addr] = r;
     }
-    r.LastSeenTick = tick;
+    r.LastSeenAt = clock;
     return r;
 }
 
@@ -5756,8 +5841,17 @@ void LoadLifecycle(string[] f)
     state = saved == MinerState.Fault ? MinerState.Fault : MinerState.Idle;
     stateEntry = true;
 
+    // Idling is not enough on its own. StIdle launches the moment it sees
+    // jobRunning, so restoring that flag as true means the ship undocks by
+    // itself on the first tick after a recompile or a server restart — the
+    // exact opposite of what the paragraph above promises, and it does it while
+    // the operator is still reading the config they just changed. The run flag
+    // is the operator's, and it does not survive a reload.
     if (saved != MinerState.Idle && saved != MinerState.Fault)
+    {
+        jobRunning = false;
         Log("Resumed from " + saved + " — idling, run 'start' to continue");
+    }
 }
 
 void LoadLearned(string[] f)
@@ -6491,8 +6585,8 @@ string heldLock = "";
 string wantLock = "";
 /// <summary>Tick of our last ask, for re-ask backoff.</summary>
 long lockAskTick;
-/// <summary>Tick we started waiting. Bounds the wait.</summary>
-long lockWaitTick;
+/// <summary>Clock reading when we started waiting, in seconds. Bounds the wait.</summary>
+double lockWaitStartedAt;
 /// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
 bool lockOverridden;
 /// <summary>Where we parked while waiting. Captured once so the ship holds a
@@ -6516,14 +6610,14 @@ bool AcquireAirspace(string section)
     {
         wantLock = section;
         lockAskTick = 0;
-        lockWaitTick = tick;
+        lockWaitStartedAt = clock;
         lockOverridden = false;
     }
 
     // Waiting is bounded. A dispatcher that has stopped answering must not be
     // able to hold the whole fleet in mid-air, which is the same reasoning that
     // makes a missing dispatcher fall back to solo mining rather than parking.
-    if (tick - lockWaitTick > (long)(lockPatience / Math.Max(dt, 0.01)))
+    if (clock - lockWaitStartedAt > lockPatience)
     {
         if (!lockOverridden)
         {
@@ -6557,8 +6651,9 @@ bool AcquireAirspace(string section)
 //  No queue here, unlike the lock. The dispatcher re-grants a slot the asker
 //  already holds and otherwise answers -1, so a drone simply asks again.
 
-/// <summary>Tick we started waiting for a slot. Zero when not waiting.</summary>
-long dockWaitTick;
+/// <summary>Clock reading when we started waiting for a slot, in seconds. Zero
+/// when not waiting.</summary>
+double dockWaitStartedAt;
 /// <summary>Tick of our last ask, for re-ask backoff.</summary>
 long dockAskTick;
 /// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
@@ -6584,9 +6679,9 @@ bool AcquireDockSlot()
     if (!HasDispatcher) return true;
     if (myDockSlot >= 0) return true;
 
-    if (dockWaitTick == 0) dockWaitTick = tick;
+    if (dockWaitStartedAt == 0) dockWaitStartedAt = clock;
 
-    if (tick - dockWaitTick > (long)(dockPatience / Math.Max(dt, 0.01)))
+    if (clock - dockWaitStartedAt > dockPatience)
     {
         if (!dockOverridden)
         {
@@ -6609,7 +6704,7 @@ bool AcquireDockSlot()
 /// <summary>Forget any slot wait. Called when a return leg begins.</summary>
 void ResetDockWait()
 {
-    dockWaitTick = 0;
+    dockWaitStartedAt = 0;
     dockAskTick = 0;
     dockOverridden = false;
     dockHoldPoint = Vector3D.Zero;
@@ -6651,7 +6746,7 @@ void OnLockGrant(long src, string[] f)
 /// <summary>Who holds each section.</summary>
 readonly Dictionary<string, long> lockOwner = new Dictionary<string, long>();
 /// <summary>When each section was granted, for the hold timeout.</summary>
-readonly Dictionary<string, long> lockGrantTick = new Dictionary<string, long>();
+readonly Dictionary<string, double> lockGrantedAt = new Dictionary<string, double>();
 /// <summary>Who is waiting for each section, oldest first. A List rather than a
 /// Queue because drones die and have to be removed from the middle.</summary>
 readonly Dictionary<string, List<long>> lockQueue = new Dictionary<string, List<long>>();
@@ -6706,7 +6801,7 @@ void SendLockGrant(long to, string section)
 void GiveLock(string section, long to)
 {
     lockOwner[section] = to;
-    lockGrantTick[section] = tick;
+    lockGrantedAt[section] = clock;
     DropFromQueues(to);
     SendLockGrant(to, section);
 }
@@ -6752,8 +6847,7 @@ void ExpireAirspaceLocks()
 {
     if (lockOwner.Count == 0) return;
 
-    long silence = (long)(droneTimeout / Math.Max(dt, 0.01));
-    long hold = (long)(Math.Max(30.0, stateTimeout) / Math.Max(dt, 0.01));
+    double hold = Math.Max(30.0, stateTimeout);
 
     lockScratch.Clear();
     foreach (var kv in lockOwner)
@@ -6762,11 +6856,11 @@ void ExpireAirspaceLocks()
         if (owner == 0) continue;
 
         DroneRecord r;
-        bool gone = !fleet.TryGetValue(owner, out r) || tick - r.LastSeenTick > silence;
+        bool gone = !fleet.TryGetValue(owner, out r) || clock - r.LastSeenAt > droneTimeout;
 
-        long granted;
-        lockGrantTick.TryGetValue(kv.Key, out granted);
-        bool stale = granted != 0 && tick - granted > hold;
+        double granted;
+        lockGrantedAt.TryGetValue(kv.Key, out granted);
+        bool stale = granted != 0 && clock - granted > hold;
 
         if (gone || stale) lockScratch.Add(kv.Key);
     }
@@ -6810,7 +6904,7 @@ void PurgeAirspace()
             IGC.SendUnicastMessage(lockOwner[lockScratch[i]], igcChannel, "KG|-");
 
         lockOwner.Clear();
-        lockGrantTick.Clear();
+        lockGrantedAt.Clear();
         lockQueue.Clear();
         Log("Airspace locks purged");
         return;

@@ -93,12 +93,12 @@ void SetState(MinerState next)
 {
     if (state == next)
     {
-        stateTicks = 0;
+        stateEnteredAt = clock;
         stateEntry = true;
         return;
     }
     state = next;
-    stateTicks = 0;
+    stateEnteredAt = clock;
     stateEntry = true;
     stuckTicks = 0;
 }
@@ -116,7 +116,7 @@ void Watchdog()
     // Servicing legitimately takes as long as the batteries take.
     if (state == MinerState.Servicing) return;
 
-    if (stateTicks * dt < stateTimeout) return;
+    if (clock - stateEnteredAt < stateTimeout) return;
 
     Log("Watchdog: " + state + " ran over " + Fmt(stateTimeout, 0) + "s");
 
@@ -184,7 +184,7 @@ void EnterFault(string why)
     faultReason = why;
     Log("FAULT: " + why);
     state = MinerState.Fault;
-    stateTicks = 0;
+    stateEnteredAt = clock;
     // Entry tick must fire. SafeStop is called below as well, but a state that
     // never sees stateEntry is a trap for anything added to StFault later.
     stateEntry = true;

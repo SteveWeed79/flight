@@ -42,8 +42,8 @@ string heldLock = "";
 string wantLock = "";
 /// <summary>Tick of our last ask, for re-ask backoff.</summary>
 long lockAskTick;
-/// <summary>Tick we started waiting. Bounds the wait.</summary>
-long lockWaitTick;
+/// <summary>Clock reading when we started waiting, in seconds. Bounds the wait.</summary>
+double lockWaitStartedAt;
 /// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
 bool lockOverridden;
 /// <summary>Where we parked while waiting. Captured once so the ship holds a
@@ -67,14 +67,14 @@ bool AcquireAirspace(string section)
     {
         wantLock = section;
         lockAskTick = 0;
-        lockWaitTick = tick;
+        lockWaitStartedAt = clock;
         lockOverridden = false;
     }
 
     // Waiting is bounded. A dispatcher that has stopped answering must not be
     // able to hold the whole fleet in mid-air, which is the same reasoning that
     // makes a missing dispatcher fall back to solo mining rather than parking.
-    if (tick - lockWaitTick > (long)(lockPatience / Math.Max(dt, 0.01)))
+    if (clock - lockWaitStartedAt > lockPatience)
     {
         if (!lockOverridden)
         {
@@ -108,8 +108,9 @@ bool AcquireAirspace(string section)
 //  No queue here, unlike the lock. The dispatcher re-grants a slot the asker
 //  already holds and otherwise answers -1, so a drone simply asks again.
 
-/// <summary>Tick we started waiting for a slot. Zero when not waiting.</summary>
-long dockWaitTick;
+/// <summary>Clock reading when we started waiting for a slot, in seconds. Zero
+/// when not waiting.</summary>
+double dockWaitStartedAt;
 /// <summary>Tick of our last ask, for re-ask backoff.</summary>
 long dockAskTick;
 /// <summary>Set once we have given up waiting, so we complain exactly once.</summary>
@@ -135,9 +136,9 @@ bool AcquireDockSlot()
     if (!HasDispatcher) return true;
     if (myDockSlot >= 0) return true;
 
-    if (dockWaitTick == 0) dockWaitTick = tick;
+    if (dockWaitStartedAt == 0) dockWaitStartedAt = clock;
 
-    if (tick - dockWaitTick > (long)(dockPatience / Math.Max(dt, 0.01)))
+    if (clock - dockWaitStartedAt > dockPatience)
     {
         if (!dockOverridden)
         {
@@ -160,7 +161,7 @@ bool AcquireDockSlot()
 /// <summary>Forget any slot wait. Called when a return leg begins.</summary>
 void ResetDockWait()
 {
-    dockWaitTick = 0;
+    dockWaitStartedAt = 0;
     dockAskTick = 0;
     dockOverridden = false;
     dockHoldPoint = Vector3D.Zero;
@@ -202,7 +203,7 @@ void OnLockGrant(long src, string[] f)
 /// <summary>Who holds each section.</summary>
 readonly Dictionary<string, long> lockOwner = new Dictionary<string, long>();
 /// <summary>When each section was granted, for the hold timeout.</summary>
-readonly Dictionary<string, long> lockGrantTick = new Dictionary<string, long>();
+readonly Dictionary<string, double> lockGrantedAt = new Dictionary<string, double>();
 /// <summary>Who is waiting for each section, oldest first. A List rather than a
 /// Queue because drones die and have to be removed from the middle.</summary>
 readonly Dictionary<string, List<long>> lockQueue = new Dictionary<string, List<long>>();
@@ -257,7 +258,7 @@ void SendLockGrant(long to, string section)
 void GiveLock(string section, long to)
 {
     lockOwner[section] = to;
-    lockGrantTick[section] = tick;
+    lockGrantedAt[section] = clock;
     DropFromQueues(to);
     SendLockGrant(to, section);
 }
@@ -303,8 +304,7 @@ void ExpireAirspaceLocks()
 {
     if (lockOwner.Count == 0) return;
 
-    long silence = (long)(droneTimeout / Math.Max(dt, 0.01));
-    long hold = (long)(Math.Max(30.0, stateTimeout) / Math.Max(dt, 0.01));
+    double hold = Math.Max(30.0, stateTimeout);
 
     lockScratch.Clear();
     foreach (var kv in lockOwner)
@@ -313,11 +313,11 @@ void ExpireAirspaceLocks()
         if (owner == 0) continue;
 
         DroneRecord r;
-        bool gone = !fleet.TryGetValue(owner, out r) || tick - r.LastSeenTick > silence;
+        bool gone = !fleet.TryGetValue(owner, out r) || clock - r.LastSeenAt > droneTimeout;
 
-        long granted;
-        lockGrantTick.TryGetValue(kv.Key, out granted);
-        bool stale = granted != 0 && tick - granted > hold;
+        double granted;
+        lockGrantedAt.TryGetValue(kv.Key, out granted);
+        bool stale = granted != 0 && clock - granted > hold;
 
         if (gone || stale) lockScratch.Add(kv.Key);
     }
@@ -361,7 +361,7 @@ void PurgeAirspace()
             IGC.SendUnicastMessage(lockOwner[lockScratch[i]], igcChannel, "KG|-");
 
         lockOwner.Clear();
-        lockGrantTick.Clear();
+        lockGrantedAt.Clear();
         lockQueue.Clear();
         Log("Airspace locks purged");
         return;

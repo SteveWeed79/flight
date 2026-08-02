@@ -572,7 +572,7 @@ void RecordShaftResult(int idx, ShaftResult result, double oreKg, double metres,
     cell.MetresDrilled += (float)metres;
     cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
     cell.LeasedBy = 0;
-    cell.LeaseExpiresTick = 0;
+    cell.LeaseExpiresAt = 0;
 
     switch (result)
     {

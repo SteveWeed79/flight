@@ -90,8 +90,7 @@ bool DispatcherSilent
 {
     get
     {
-        return HasDispatcher
-            && tick - lastDispatcherSeenTick > (long)(droneTimeout / Math.Max(dt, 0.01));
+        return HasDispatcher && clock - lastDispatcherSeenAt > droneTimeout;
     }
 }
 
@@ -257,7 +256,7 @@ void OnBeacon(long src, string[] f)
     // spoke last. Stay with the first one heard and say so.
     if (dispatcherAddr != 0 && dispatcherAddr != src)
     {
-        if (tick - lastDispatcherSeenTick < 600)
+        if (clock - lastDispatcherSeenAt < 60.0)
         {
             Log("Second dispatcher on channel '" + igcChannel + "' — ignoring it");
             return;
@@ -266,7 +265,7 @@ void OnBeacon(long src, string[] f)
     }
 
     dispatcherAddr = src;
-    lastDispatcherSeenTick = tick;
+    lastDispatcherSeenAt = clock;
 
     if (f.Length < 10 || f[1] != "1") return;
 
@@ -354,7 +353,7 @@ void OnHeartbeat(long src, string[] f)
     r.Battery = (float)DecD(f[4]);
     r.Position = DecV(f[5]);
     r.LeasedCell = ParseInt(f[6], -1);
-    r.LastSeenTick = tick;
+    r.LastSeenAt = clock;
 }
 
 void OnLeaseRequest(long src, string[] f)
@@ -375,7 +374,7 @@ void OnLeaseRequest(long src, string[] f)
 
     cells[cell].State = CellState.Leased;
     cells[cell].LeasedBy = src;
-    cells[cell].LeaseExpiresTick = tick + (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
+    cells[cell].LeaseExpiresAt = clock + droneTimeout * 2;
     r.LeasedCell = cell;
 
     double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;

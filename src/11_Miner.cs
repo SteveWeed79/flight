@@ -9,8 +9,6 @@
 
 void TickMiner()
 {
-    stateTicks++;
-
     if (recording) RecordTick();
 
     CheckDamage();

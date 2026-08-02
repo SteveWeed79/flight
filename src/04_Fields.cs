@@ -195,8 +195,20 @@ double[] pathCumulative = new double[0];
 
 // ---- State machine --------------------------------------------------------
 MinerState state = MinerState.Idle;
-/// <summary>Ticks spent in the current state. Watchdog input.</summary>
-int stateTicks;
+/// <summary>
+/// Value of <see cref="clock"/> when the current state was entered. Watchdog
+/// input, and the pattern every other deadline in the script follows.
+///
+/// Counting ticks and multiplying by the latest dt was wrong in a way that only
+/// showed up when it mattered: dt is the length of the *last* tick, so a lag
+/// spike or a simulation-speed drop retroactively rescaled every deadline
+/// already in flight. With dt clamped to [0.008, 0.5] that is a threefold error
+/// against the nominal 10-tick cadence, in whichever direction hurts most — a
+/// watchdog that fires early on a ship that is merely slow, or late on one that
+/// is genuinely wedged. An absolute deadline on an accumulated clock cannot be
+/// moved after the fact by anything that happens later.
+/// </summary>
+double stateEnteredAt;
 /// <summary>True only on the first tick of a state. Where per-state setup happens.</summary>
 bool stateEntry = true;
 /// <summary>Set when the operator has asked for work; cleared by "stop".</summary>
@@ -213,7 +225,8 @@ IMyBroadcastListener listener;
 IMyUnicastListener unicast;
 /// <summary>Dispatcher address if we have found one, 0 otherwise.</summary>
 long dispatcherAddr;
-long lastDispatcherSeenTick;
+/// <summary>Clock reading of the last beacon we heard, in seconds.</summary>
+double lastDispatcherSeenAt;
 /// <summary>Dispatcher: everyone who has checked in.</summary>
 readonly Dictionary<long, DroneRecord> fleet = new Dictionary<long, DroneRecord>();
 /// <summary>Miner: our assigned altitude lane over the site, metres.</summary>

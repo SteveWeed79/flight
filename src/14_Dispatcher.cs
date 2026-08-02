@@ -12,7 +12,6 @@
 
 void TickDispatcher()
 {
-    stateTicks++;
     statusLine = "Dispatching";
 
     if (recording) RecordTick();
@@ -42,12 +41,12 @@ void ExpireLeases()
     {
         YieldCell c = cells[i];
         if (c.State != CellState.Leased) continue;
-        if (c.LeaseExpiresTick == 0 || tick < c.LeaseExpiresTick) continue;
+        if (c.LeaseExpiresAt == 0 || clock < c.LeaseExpiresAt) continue;
 
         Log("Lease on " + CellLabel(i) + " expired — reissuing");
         c.State = c.MetresDrilled > 0.5f ? CellState.Rich : CellState.Unknown;
         c.LeasedBy = 0;
-        c.LeaseExpiresTick = 0;
+        c.LeaseExpiresAt = 0;
     }
 }
 
@@ -56,14 +55,12 @@ void ExpireDrones()
 {
     if (fleet.Count == 0) return;
 
-    long limit = (long)(droneTimeout / Math.Max(dt, 0.01));
-
     // Collect first, mutate after — removing from a dictionary mid-enumeration
     // throws, and it will throw on the exact night you are not watching.
     var lost = new List<long>();
 
     foreach (var kv in fleet)
-        if (tick - kv.Value.LastSeenTick > limit) lost.Add(kv.Key);
+        if (clock - kv.Value.LastSeenAt > droneTimeout) lost.Add(kv.Key);
 
     for (int i = 0; i < lost.Count; i++)
     {
@@ -131,7 +128,7 @@ DroneRecord DroneFor(long addr)
         r.Lane = fleet.Count * laneSpacing;
         fleet[addr] = r;
     }
-    r.LastSeenTick = tick;
+    r.LastSeenAt = clock;
     return r;
 }
 

@@ -106,8 +106,9 @@ public class YieldCell
     public float DepthReached;
     /// <summary>Which drone holds this cell, 0 = nobody.</summary>
     public long LeasedBy;
-    /// <summary>Tick at which an unrenewed lease expires.</summary>
-    public long LeaseExpiresTick;
+    /// <summary>Clock reading, in seconds, at which an unrenewed lease expires.
+    /// Zero means no lease. Absolute, so a lag spike cannot move it.</summary>
+    public double LeaseExpiresAt;
     /// <summary>How many times a ship got stuck here. 3 strikes and it's Blocked.</summary>
     public int StuckCount;
 
@@ -138,8 +139,9 @@ public class DroneRecord
     public float CargoFill;
     public float Battery;
     public Vector3D Position;
-    /// <summary>Last tick we heard from it. Silence past a timeout = presumed dead.</summary>
-    public long LastSeenTick;
+    /// <summary>Clock reading of the last message from it, in seconds. Silence
+    /// past a timeout = presumed dead.</summary>
+    public double LastSeenAt;
     /// <summary>Cell it currently holds, -1 if none.</summary>
     public int LeasedCell = -1;
     /// <summary>Dock slot it holds, -1 if none.</summary>
