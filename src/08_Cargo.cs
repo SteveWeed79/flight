@@ -240,15 +240,15 @@ bool UnloadToBase()
     // Base containers: reachable through the terminal system while docked, but
     // explicitly not part of our own construct.
     //
-    // Typed rather than IMyTerminalBlock-with-a-cast, because the untyped form
-    // runs the predicate against every block on the base — lights, conveyors,
-    // catwalks, all of it — and this is called at 6 Hz for as long as the ship is
-    // docked. On a large station that is the single most expensive thing the
-    // script does, and it scales with a build the script does not control.
+    // Filtered by type at the API rather than by a predicate that runs against
+    // every block on the base — lights, conveyors, catwalks, all of it — because
+    // this runs for as long as the ship is docked and scales with a build the
+    // script does not control. The explicit type argument with the existing
+    // scratch list is what keeps that narrowing without allocating a second list
+    // on every call; allocating inside Main is how these scripts start to stutter.
     blockScratch.Clear();
-    var baseCargo = new List<IMyCargoContainer>();
-    GridTerminalSystem.GetBlocksOfType(baseCargo, b => !b.IsSameConstructAs(Me));
-    for (int i = 0; i < baseCargo.Count; i++) blockScratch.Add(baseCargo[i]);
+    GridTerminalSystem.GetBlocksOfType<IMyCargoContainer>(
+        blockScratch, b => !b.IsSameConstructAs(Me));
 
     // The far connector is a valid destination in its own right and is the only
     // one that exists on a base whose storage sits behind a sorter.

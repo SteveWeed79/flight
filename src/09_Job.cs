@@ -353,53 +353,44 @@ int EffectiveProbeStride()
     return Math.Min(stride, SCORE_RADIUS * 2);
 }
 
-/// <summary>Next un-probed lattice point, nearest to the ship first.</summary>
+/// <summary>
+/// Next un-probed lattice point, nearest to the ship first.
+///
+/// The lattice always includes the far edges, not only multiples of the stride.
+/// A job whose width is not a whole number of strides would otherwise never
+/// probe its last column: EdgeStillRich then has nothing to sample there, and
+/// the grid can only ever grow the other way.
+/// </summary>
 int NextProbeCell()
 {
     int best = -1;
     double bestDist = double.MaxValue;
     int stride = EffectiveProbeStride();
 
-    // The far edge is always included, not just multiples of the stride. Without
-    // it a job whose width is not a multiple never probes its last column, so
-    // EdgeStillRich has nothing to sample there and the grid can only ever grow
-    // one way.
-    for (int row = 0; row < job.Height; row += stride)
+    for (int r = 0; ; r += stride)
     {
-        for (int col = 0; col < job.Width; col += stride)
+        // Clamp the last step onto the final row rather than stepping past it.
+        // Walking the stride and then patching the edges afterwards is what the
+        // first attempt at this did, and it managed to miss the far corner
+        // entirely while skipping the edge check whenever the stride cell it was
+        // nested under happened to be probed already.
+        int row = Math.Min(r, job.Height - 1);
+
+        for (int c = 0; ; c += stride)
         {
+            int col = Math.Min(c, job.Width - 1);
+
             int idx = job.IndexOf(col, row);
-            if (cells[idx].State != CellState.Unknown) continue;
-            if (!cells[idx].Available) continue;
-
-            double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
-            if (d < bestDist) { bestDist = d; best = idx; }
-
-            // Fold in the far column on the last pass of each row.
-            if (col + stride >= job.Width && col != job.Width - 1)
+            if (cells[idx].State == CellState.Unknown && cells[idx].Available)
             {
-                int edge = job.IndexOf(job.Width - 1, row);
-                if (cells[edge].State == CellState.Unknown && cells[edge].Available)
-                {
-                    double de = Vector3D.DistanceSquared(
-                        job.CellMouth(job.Width - 1, row, 0), selectionOrigin);
-                    if (de < bestDist) { bestDist = de; best = edge; }
-                }
+                double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
+                if (d < bestDist) { bestDist = d; best = idx; }
             }
+
+            if (col >= job.Width - 1) break;
         }
 
-        // And the far row, likewise.
-        if (row + stride >= job.Height && row != job.Height - 1)
-        {
-            for (int col = 0; col < job.Width; col += stride)
-            {
-                int edge = job.IndexOf(col, job.Height - 1);
-                if (cells[edge].State != CellState.Unknown || !cells[edge].Available) continue;
-                double de = Vector3D.DistanceSquared(
-                    job.CellMouth(col, job.Height - 1, 0), selectionOrigin);
-                if (de < bestDist) { bestDist = de; best = edge; }
-            }
-        }
+        if (row >= job.Height - 1) break;
     }
     return best;
 }

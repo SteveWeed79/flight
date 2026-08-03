@@ -197,9 +197,10 @@ void BeginShaft()
     // Metres of rock to cut, not depth from the job plane. A resumed shaft needs
     // no special handling: the already-cut section returns no material, so
     // contact is simply detected again at the old bottom.
-    // Solo only. With a dispatcher, OnLeaseGrant has already set this from the
-    // dispatcher's own probeDepth, which need not match ours — recomputing it
-    // here made the granted limit a dead field on the wire.
+    //
+    // Set here only when solo. With a dispatcher, OnLeaseGrant has already filled
+    // it in from the dispatcher's own probeDepth, which need not match ours —
+    // recomputing it here made the granted limit a dead field on the wire.
     if (!HasDispatcher)
         shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 
@@ -576,11 +577,25 @@ void StDocking(bool entry)
     if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
     if (!homeDockSet) { EnterFault("No dock recorded"); return; }
 
-    // Wait our turn at the pad. Dock slots were being requested, granted and
-    // released, and then nothing ever consulted them — so on a shared connector
-    // two drones flew the same mating run at once. Bounded like the airspace
-    // wait, because a dispatcher that stops answering must not strand a ship
-    // holding station on its last few percent of hydrogen.
+    if (Docked)
+    {
+        SafeStop();
+        dockRetries = 0;
+        dockNearZone = false;
+        SetState(MinerState.Unloading);
+        return;
+    }
+
+    // Wait our turn at the pad — but only once we know we are not already on it.
+    // Checked after the Docked test above, because a ship that is latched and has
+    // somehow not been granted a slot must not be told to fly to a holding point
+    // while still connected.
+    //
+    // Dock slots were being requested, granted and released, and then consulted
+    // by nothing at all — so on a shared connector two drones flew the same
+    // mating run at once. Bounded like the airspace wait, because a dispatcher
+    // that stops answering must not strand a ship holding station on its last
+    // few percent of hydrogen.
     if (HasDispatcher && dockSlots > 0 && myDockSlot < 0)
     {
         if (dockWaitTick == 0) dockWaitTick = tick;
@@ -593,17 +608,12 @@ void StDocking(bool entry)
             Orient(-homeDockForward, homeDockUp);
             return;
         }
+        // Waited long enough — dock without one. dockWaitTick deliberately stays
+        // set: clearing it here would re-arm the wait on the very next tick, so
+        // the ship would approach for one tick, wait another full patience, and
+        // repeat. Same shape as the airspace override, same fix.
     }
-    dockWaitTick = 0;
-
-    if (Docked)
-    {
-        SafeStop();
-        dockRetries = 0;
-        dockNearZone = false;
-        SetState(MinerState.Unloading);
-        return;
-    }
+    else dockWaitTick = 0;
 
     Vector3D mate = homeDock.Position;
     Vector3D axis = homeDockForward;

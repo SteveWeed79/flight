@@ -95,26 +95,25 @@ void CollectScreens()
 {
     panels.Clear();
 
-    // Typed, so the predicate is not run against every block of whatever the ship
-    // happens to be docked to. Cockpits and consoles are providers too, so this
-    // is collected separately below rather than folded in.
-    var surfaces = new List<IMyTextPanel>();
-    GridTerminalSystem.GetBlocksOfType(surfaces, b => Mine(b) && b.CustomName.Contains(lcdTag));
-
+    // Narrowed to the surface interface at the API, so the predicate is not run
+    // against every block of whatever the ship is docked to — and to
+    // IMyTextSurfaceProvider rather than IMyTextPanel, because a text panel is
+    // only the flat LCD. Cockpits, control seats and consoles are providers too,
+    // and narrowing to panels silently dropped every one of them.
     blockScratch.Clear();
-    for (int i = 0; i < surfaces.Count; i++) blockScratch.Add(surfaces[i]);
+    GridTerminalSystem.GetBlocksOfType<IMyTextSurfaceProvider>(
+        blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
 
     for (int i = 0; i < blockScratch.Count; i++)
     {
-        // The programmable block's own screen is handled below and must not be
-        // claimed here as well, or two renderers fight over one surface.
-        if (blockScratch[i] == Me) continue;
-
-        var provider = blockScratch[i] as IMyTextSurfaceProvider;
+        IMyTextSurfaceProvider provider = blockScratch[i] as IMyTextSurfaceProvider;
         if (provider == null || provider.SurfaceCount == 0) continue;
 
-        // A plain LCD panel is also a provider with one surface, so this single
-        // path covers panels, cockpits and consoles alike.
+        // The programmable block is a provider as well, and its own screen is
+        // set up below. Claiming it here too would put two renderers on one
+        // surface, each overwriting the other every frame.
+        if (blockScratch[i] == Me) continue;
+
         IMyTextSurface s = provider.GetSurface(0);
 
         // SCRIPT mode hands the surface to us for sprite drawing. Clearing Script

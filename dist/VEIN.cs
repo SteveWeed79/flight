@@ -1266,26 +1266,25 @@ void CollectScreens()
 {
     panels.Clear();
 
-    // Typed, so the predicate is not run against every block of whatever the ship
-    // happens to be docked to. Cockpits and consoles are providers too, so this
-    // is collected separately below rather than folded in.
-    var surfaces = new List<IMyTextPanel>();
-    GridTerminalSystem.GetBlocksOfType(surfaces, b => Mine(b) && b.CustomName.Contains(lcdTag));
-
+    // Narrowed to the surface interface at the API, so the predicate is not run
+    // against every block of whatever the ship is docked to — and to
+    // IMyTextSurfaceProvider rather than IMyTextPanel, because a text panel is
+    // only the flat LCD. Cockpits, control seats and consoles are providers too,
+    // and narrowing to panels silently dropped every one of them.
     blockScratch.Clear();
-    for (int i = 0; i < surfaces.Count; i++) blockScratch.Add(surfaces[i]);
+    GridTerminalSystem.GetBlocksOfType<IMyTextSurfaceProvider>(
+        blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
 
     for (int i = 0; i < blockScratch.Count; i++)
     {
-        // The programmable block's own screen is handled below and must not be
-        // claimed here as well, or two renderers fight over one surface.
-        if (blockScratch[i] == Me) continue;
-
-        var provider = blockScratch[i] as IMyTextSurfaceProvider;
+        IMyTextSurfaceProvider provider = blockScratch[i] as IMyTextSurfaceProvider;
         if (provider == null || provider.SurfaceCount == 0) continue;
 
-        // A plain LCD panel is also a provider with one surface, so this single
-        // path covers panels, cockpits and consoles alike.
+        // The programmable block is a provider as well, and its own screen is
+        // set up below. Claiming it here too would put two renderers on one
+        // surface, each overwriting the other every frame.
+        if (blockScratch[i] == Me) continue;
+
         IMyTextSurface s = provider.GetSurface(0);
 
         // SCRIPT mode hands the surface to us for sprite drawing. Clearing Script
@@ -2137,15 +2136,15 @@ bool UnloadToBase()
     // Base containers: reachable through the terminal system while docked, but
     // explicitly not part of our own construct.
     //
-    // Typed rather than IMyTerminalBlock-with-a-cast, because the untyped form
-    // runs the predicate against every block on the base — lights, conveyors,
-    // catwalks, all of it — and this is called at 6 Hz for as long as the ship is
-    // docked. On a large station that is the single most expensive thing the
-    // script does, and it scales with a build the script does not control.
+    // Filtered by type at the API rather than by a predicate that runs against
+    // every block on the base — lights, conveyors, catwalks, all of it — because
+    // this runs for as long as the ship is docked and scales with a build the
+    // script does not control. The explicit type argument with the existing
+    // scratch list is what keeps that narrowing without allocating a second list
+    // on every call; allocating inside Main is how these scripts start to stutter.
     blockScratch.Clear();
-    var baseCargo = new List<IMyCargoContainer>();
-    GridTerminalSystem.GetBlocksOfType(baseCargo, b => !b.IsSameConstructAs(Me));
-    for (int i = 0; i < baseCargo.Count; i++) blockScratch.Add(baseCargo[i]);
+    GridTerminalSystem.GetBlocksOfType<IMyCargoContainer>(
+        blockScratch, b => !b.IsSameConstructAs(Me));
 
     // The far connector is a valid destination in its own right and is the only
     // one that exists on a base whose storage sits behind a sorter.
@@ -2700,53 +2699,44 @@ int EffectiveProbeStride()
     return Math.Min(stride, SCORE_RADIUS * 2);
 }
 
-/// <summary>Next un-probed lattice point, nearest to the ship first.</summary>
+/// <summary>
+/// Next un-probed lattice point, nearest to the ship first.
+///
+/// The lattice always includes the far edges, not only multiples of the stride.
+/// A job whose width is not a whole number of strides would otherwise never
+/// probe its last column: EdgeStillRich then has nothing to sample there, and
+/// the grid can only ever grow the other way.
+/// </summary>
 int NextProbeCell()
 {
     int best = -1;
     double bestDist = double.MaxValue;
     int stride = EffectiveProbeStride();
 
-    // The far edge is always included, not just multiples of the stride. Without
-    // it a job whose width is not a multiple never probes its last column, so
-    // EdgeStillRich has nothing to sample there and the grid can only ever grow
-    // one way.
-    for (int row = 0; row < job.Height; row += stride)
+    for (int r = 0; ; r += stride)
     {
-        for (int col = 0; col < job.Width; col += stride)
+        // Clamp the last step onto the final row rather than stepping past it.
+        // Walking the stride and then patching the edges afterwards is what the
+        // first attempt at this did, and it managed to miss the far corner
+        // entirely while skipping the edge check whenever the stride cell it was
+        // nested under happened to be probed already.
+        int row = Math.Min(r, job.Height - 1);
+
+        for (int c = 0; ; c += stride)
         {
+            int col = Math.Min(c, job.Width - 1);
+
             int idx = job.IndexOf(col, row);
-            if (cells[idx].State != CellState.Unknown) continue;
-            if (!cells[idx].Available) continue;
-
-            double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
-            if (d < bestDist) { bestDist = d; best = idx; }
-
-            // Fold in the far column on the last pass of each row.
-            if (col + stride >= job.Width && col != job.Width - 1)
+            if (cells[idx].State == CellState.Unknown && cells[idx].Available)
             {
-                int edge = job.IndexOf(job.Width - 1, row);
-                if (cells[edge].State == CellState.Unknown && cells[edge].Available)
-                {
-                    double de = Vector3D.DistanceSquared(
-                        job.CellMouth(job.Width - 1, row, 0), selectionOrigin);
-                    if (de < bestDist) { bestDist = de; best = edge; }
-                }
+                double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
+                if (d < bestDist) { bestDist = d; best = idx; }
             }
+
+            if (col >= job.Width - 1) break;
         }
 
-        // And the far row, likewise.
-        if (row + stride >= job.Height && row != job.Height - 1)
-        {
-            for (int col = 0; col < job.Width; col += stride)
-            {
-                int edge = job.IndexOf(col, job.Height - 1);
-                if (cells[edge].State != CellState.Unknown || !cells[edge].Available) continue;
-                double de = Vector3D.DistanceSquared(
-                    job.CellMouth(col, job.Height - 1, 0), selectionOrigin);
-                if (de < bestDist) { bestDist = de; best = edge; }
-            }
-        }
+        if (row >= job.Height - 1) break;
     }
     return best;
 }
@@ -3527,9 +3517,10 @@ void BeginShaft()
     // Metres of rock to cut, not depth from the job plane. A resumed shaft needs
     // no special handling: the already-cut section returns no material, so
     // contact is simply detected again at the old bottom.
-    // Solo only. With a dispatcher, OnLeaseGrant has already set this from the
-    // dispatcher's own probeDepth, which need not match ours — recomputing it
-    // here made the granted limit a dead field on the wire.
+    //
+    // Set here only when solo. With a dispatcher, OnLeaseGrant has already filled
+    // it in from the dispatcher's own probeDepth, which need not match ours —
+    // recomputing it here made the granted limit a dead field on the wire.
     if (!HasDispatcher)
         shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 
@@ -3906,11 +3897,25 @@ void StDocking(bool entry)
     if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
     if (!homeDockSet) { EnterFault("No dock recorded"); return; }
 
-    // Wait our turn at the pad. Dock slots were being requested, granted and
-    // released, and then nothing ever consulted them — so on a shared connector
-    // two drones flew the same mating run at once. Bounded like the airspace
-    // wait, because a dispatcher that stops answering must not strand a ship
-    // holding station on its last few percent of hydrogen.
+    if (Docked)
+    {
+        SafeStop();
+        dockRetries = 0;
+        dockNearZone = false;
+        SetState(MinerState.Unloading);
+        return;
+    }
+
+    // Wait our turn at the pad — but only once we know we are not already on it.
+    // Checked after the Docked test above, because a ship that is latched and has
+    // somehow not been granted a slot must not be told to fly to a holding point
+    // while still connected.
+    //
+    // Dock slots were being requested, granted and released, and then consulted
+    // by nothing at all — so on a shared connector two drones flew the same
+    // mating run at once. Bounded like the airspace wait, because a dispatcher
+    // that stops answering must not strand a ship holding station on its last
+    // few percent of hydrogen.
     if (HasDispatcher && dockSlots > 0 && myDockSlot < 0)
     {
         if (dockWaitTick == 0) dockWaitTick = tick;
@@ -3923,17 +3928,12 @@ void StDocking(bool entry)
             Orient(-homeDockForward, homeDockUp);
             return;
         }
+        // Waited long enough — dock without one. dockWaitTick deliberately stays
+        // set: clearing it here would re-arm the wait on the very next tick, so
+        // the ship would approach for one tick, wait another full patience, and
+        // repeat. Same shape as the airspace override, same fix.
     }
-    dockWaitTick = 0;
-
-    if (Docked)
-    {
-        SafeStop();
-        dockRetries = 0;
-        dockNearZone = false;
-        SetState(MinerState.Unloading);
-        return;
-    }
+    else dockWaitTick = 0;
 
     Vector3D mate = homeDock.Position;
     Vector3D axis = homeDockForward;
