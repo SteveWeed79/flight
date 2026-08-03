@@ -207,7 +207,8 @@ void BeginShaft()
 void StApproaching(bool entry)
 {
     if (activeCell < 0) { SetState(MinerState.Selecting); return; }
-    if (entry) { statusLine = "To shaft " + CellLabel(activeCell); SetDrills(false); }
+    // A give-up during a previous approach must not carry into this one.
+    if (entry) { statusLine = "To shaft " + CellLabel(activeCell); SetDrills(false); RearmAirspace(); }
 
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
 
@@ -377,6 +378,9 @@ void StAscending(bool entry)
     {
         statusLine = "Withdrawing";
         SetDrills(drillOnRetreat);
+        // The climb needs its own wait. A timeout on the way in says nothing
+        // about whether the sky is clear on the way out.
+        RearmAirspace();
     }
 
     if (activeCell < 0) { SetState(MinerState.Selecting); return; }
@@ -693,6 +697,16 @@ void StServicing(bool entry)
     {
         statusLine = jobComplete ? "Job complete — docked" : "Stopped — docked";
         ReleaseDock();
+        return;
+    }
+
+    // Unloading now gives up gracefully when the base has no room, rather than
+    // stalling until the watchdog faults us. Launching on the back of that would
+    // mean going out with a full hold, filling on the first shaft and coming
+    // straight back — an undock/redock cycle all night. Sit still and say why.
+    if (CargoFull)
+    {
+        statusLine = "Hold still full — no room in base storage";
         return;
     }
 

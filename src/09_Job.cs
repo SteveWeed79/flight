@@ -89,8 +89,41 @@ bool ValidateJobBasis()
     return true;
 }
 
+/// <summary>
+/// Hard ceiling on the number of shafts in a job.
+///
+/// RebuildCells allocates one object per cell inside a single invocation, and
+/// nothing upstream bounded the size: `job set 200 200 40` is 40,000 allocations
+/// in one tick, which kills the block for complexity. The size is persisted, so
+/// it then kills the block again on every boot, and a dead block cannot be sent
+/// the command that would fix it. That is unrecoverable from inside the game.
+/// </summary>
+const int MAX_CELLS = 4096;
+
+/// <summary>
+/// Bring the job size inside what one tick can build. Shrinks both axes by the
+/// same factor so an oblong site keeps its shape rather than becoming a square.
+/// </summary>
+void ClampJobSize()
+{
+    job.Width = Math.Max(1, job.Width);
+    job.Height = Math.Max(1, job.Height);
+    if (job.Width * job.Height <= MAX_CELLS) return;
+
+    double scale = Math.Sqrt((double)MAX_CELLS / (job.Width * job.Height));
+    job.Width = Math.Max(1, (int)(job.Width * scale));
+    job.Height = Math.Max(1, (int)(job.Height * scale));
+    Log("Job too large — clamped to " + job.Width + "x" + job.Height);
+}
+
+/// <summary>
+/// Allocate the yield map. Every path that changes the job's shape ends up here
+/// — SetJob, 'job size', a dispatcher beacon, a pushed frame, restored Storage —
+/// which makes this the one place the size ceiling has to be enforced.
+/// </summary>
 void RebuildCells()
 {
+    ClampJobSize();
     cells = new YieldCell[job.CellCount];
     for (int i = 0; i < cells.Length; i++) cells[i] = new YieldCell();
 }
@@ -239,13 +272,21 @@ int NextProspect()
         Consider((scoreCursor + k) % cells.Length, ref best, ref bestScore);
     scoreCursor = (scoreCursor + window) % Math.Max(1, cells.Length);
 
-    // Nothing scored well in this window, but work remains somewhere. Take the
-    // first available cell rather than reporting the job finished — a bounded
+    // Nothing scored well in this window. Take the first cell the survey has not
+    // already written off, rather than reporting the job finished — a bounded
     // scan must never be able to end a job early.
-    if (best < 0 && RemainingCellCount() > 0)
+    //
+    // Emphatically NOT barren cells. YieldCell.Available only excludes
+    // Exhausted, Blocked and Leased, so this used to hand back every cell the
+    // survey had judged empty and dig it to full depth. That is the entire
+    // premise of this file inverted — "30 holes instead of 100" turned into
+    // digging all 100 — and because the job then never ran out of work, it also
+    // meant GrowJobTowardOre was never asked. Cells whose neighbours turn out
+    // rich still get revisited: that is Consider's job, on evidence, above.
+    if (best < 0)
     {
         for (int i = 0; i < cells.Length; i++)
-            if (cells[i].Available) return i;
+            if (cells[i].Available && cells[i].State != CellState.Barren) return i;
     }
 
     // Everything left is written off as barren. That is a finished job, not a

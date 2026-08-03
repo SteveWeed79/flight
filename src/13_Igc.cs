@@ -329,6 +329,28 @@ void OnHeartbeat(long src, string[] f)
     r.Position = DecV(f[5]);
     r.LeasedCell = ParseInt(f[6], -1);
     r.LastSeenTick = tick;
+
+    // Renew the lease on the strength of the heartbeat.
+    //
+    // A lease is a loan against *silence*, not a stopwatch on the work. The
+    // deadline was set once at grant and never touched again, and droneTimeout*2
+    // is 60 s on stock config while a stock 40 m shaft takes 80-100 s — so every
+    // production shaft lost its cell mid-cut and had it reissued to a second
+    // drone, which then flew into the hole the first one was still in. The
+    // heartbeat already carries the cell index twice a second; this is the whole
+    // fix.
+    if (r.LeasedCell >= 0 && r.LeasedCell < cells.Length)
+    {
+        YieldCell held = cells[r.LeasedCell];
+        if (held.State == CellState.Leased && held.LeasedBy == src)
+            held.LeaseExpiresTick = tick + LeaseTicks();
+    }
+}
+
+/// <summary>How long a lease survives without a heartbeat renewing it.</summary>
+long LeaseTicks()
+{
+    return (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
 }
 
 void OnLeaseRequest(long src, string[] f)
@@ -349,7 +371,7 @@ void OnLeaseRequest(long src, string[] f)
 
     cells[cell].State = CellState.Leased;
     cells[cell].LeasedBy = src;
-    cells[cell].LeaseExpiresTick = tick + (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
+    cells[cell].LeaseExpiresTick = tick + LeaseTicks();
     r.LeasedCell = cell;
 
     double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;

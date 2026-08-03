@@ -104,7 +104,7 @@ Run these as the Programmable Block's argument.
 | Command | Effect |
 |---|---|
 | `start` | Begin or resume the job |
-| `stop` | Finish the current shaft, return, and park |
+| `stop` | Climb out of the shaft, return, and park |
 | `halt` | Stop immediately where you are |
 | `home` | Return and dock without finishing the job |
 | `clear` | Clear a fault after fixing the cause |

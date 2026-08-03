@@ -149,7 +149,20 @@ double ThrustAlong(Vector3D worldDir)
 double StoppingAccel(Vector3D dir)
 {
     double raw = ThrustAlong(-dir) / Math.Max(1.0, shipMass);
-    return Math.Max(0.15, raw - gravity.Length());
+
+    // Only the component of gravity along the direction of travel eats into
+    // stopping power. This used to subtract the full magnitude whichever way the
+    // ship was pointing, which is not pessimism, it is wrong: flying sideways,
+    // gravity is perpendicular and costs nothing. A typical miner's lateral
+    // thrust-to-mass is 3-5 m/s^2, so `raw - 9.81` went negative and every
+    // horizontal move on a planet clamped to the 0.15 floor below — about 1 m/s
+    // along a recorded route, which then timed the state out on the way home.
+    //
+    // One-sided on purpose. Gravity pulling the way we are already braking would
+    // help, and help is not banked: climbing pays the cost, descending simply
+    // does not get a discount.
+    double along = Vector3D.Dot(gravity, dir);
+    return Math.Max(0.15, raw - Math.Max(0.0, along));
 }
 
 /// <summary>Fly toward a point, arriving with zero velocity.</summary>

@@ -241,11 +241,13 @@ bool UnloadToBase()
     }
 
     bool moved = false;
+    bool anyRoom = false;
     for (int d = 0; d < blockScratch.Count; d++)
     {
         IMyInventory dst = blockScratch[d].GetInventory(0);
         if (dst == null) continue;
         if ((double)dst.CurrentVolume >= (double)dst.MaxVolume * 0.99) continue;
+        anyRoom = true;
 
         for (int i = 0; i < cargo.Count; i++)
             if (DrainAll(cargo[i].GetInventory(0), dst)) moved = true;
@@ -256,7 +258,15 @@ bool UnloadToBase()
     }
 
     if (moved) SampleInventories();
-    return cargoFill < 0.02;
+    if (cargoFill < 0.02) return true;
+
+    // Nowhere left to put it. This method's contract is "empty, or as empty as
+    // it is going to get" — but with every base container full it returned false
+    // forever, the ship sat on the connector, and the watchdog faulted it. A full
+    // base is an ordinary situation an operator can see and fix; it should not
+    // need a fault cleared afterwards.
+    if (!anyRoom) return true;
+    return false;
 }
 
 bool DrainAll(IMyInventory src, IMyInventory dst)

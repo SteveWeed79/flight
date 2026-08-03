@@ -143,6 +143,13 @@ void CmdStart()
         return;
     }
 
+    // Servicing switches the thrusters off to charge faster, and a 'halt' from
+    // there leaves them off. CheckReadiness then refuses to start with "All
+    // thrusters switched off" and the only way out is the terminal — a dead end
+    // reached by typing two documented commands in order. Costs nothing on a
+    // ship that already had them on, because SetThrusters only writes on change.
+    SetThrusters(true);
+
     Health h = CheckReadiness();
     if (!h.Ok) { Log("Cannot start: " + h.Detail); return; }
 

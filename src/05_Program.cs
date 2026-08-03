@@ -132,6 +132,19 @@ void Watchdog()
             // even reach as completed, or worse, as unfinished and worth
             // retrying forever.
             pendingResult = ShaftResult.Stuck;
+
+            // Descending -> Ascending is progress and gets a fresh timer.
+            // Ascending -> Ascending is not: SetState on the state you are
+            // already in resets the very timer that just fired, so the ship
+            // that cannot climb out of a hole retries silently forever. That is
+            // precisely the hang this watchdog exists to prevent, and it was
+            // sitting in the watchdog itself.
+            if (state == MinerState.Ascending)
+            {
+                EnterFault("Could not climb out of " + CellLabel(activeCell));
+                break;
+            }
+
             SetState(MinerState.Ascending);
             break;
 

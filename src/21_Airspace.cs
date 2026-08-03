@@ -97,6 +97,23 @@ bool AcquireAirspace(string section)
     return false;
 }
 
+/// <summary>
+/// Begin a fresh wait for the airspace.
+///
+/// Called on entry to each phase that needs it. Without this, giving up once
+/// latches for the rest of the shaft cycle: wantLock still names the section, so
+/// AcquireAirspace never re-arms the clock and returns true unconditionally
+/// thereafter. A single busy moment during the approach would therefore disable
+/// the mutex for the climb out as well — and the climb is the half that matters,
+/// because that is where the ship comes up blind into shared sky.
+/// </summary>
+void RearmAirspace()
+{
+    if (heldLock.Length > 0) return;      // still ours; nothing to re-arm
+    wantLock = "";
+    lockOverridden = false;
+}
+
 /// <summary>Give the section back. Safe to call when we hold nothing.</summary>
 void ReleaseAirspace()
 {

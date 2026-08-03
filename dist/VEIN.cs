@@ -1055,6 +1055,19 @@ void Watchdog()
             // even reach as completed, or worse, as unfinished and worth
             // retrying forever.
             pendingResult = ShaftResult.Stuck;
+
+            // Descending -> Ascending is progress and gets a fresh timer.
+            // Ascending -> Ascending is not: SetState on the state you are
+            // already in resets the very timer that just fired, so the ship
+            // that cannot climb out of a hole retries silently forever. That is
+            // precisely the hang this watchdog exists to prevent, and it was
+            // sitting in the watchdog itself.
+            if (state == MinerState.Ascending)
+            {
+                EnterFault("Could not climb out of " + CellLabel(activeCell));
+                break;
+            }
+
             SetState(MinerState.Ascending);
             break;
 
@@ -1545,7 +1558,20 @@ double ThrustAlong(Vector3D worldDir)
 double StoppingAccel(Vector3D dir)
 {
     double raw = ThrustAlong(-dir) / Math.Max(1.0, shipMass);
-    return Math.Max(0.15, raw - gravity.Length());
+
+    // Only the component of gravity along the direction of travel eats into
+    // stopping power. This used to subtract the full magnitude whichever way the
+    // ship was pointing, which is not pessimism, it is wrong: flying sideways,
+    // gravity is perpendicular and costs nothing. A typical miner's lateral
+    // thrust-to-mass is 3-5 m/s^2, so `raw - 9.81` went negative and every
+    // horizontal move on a planet clamped to the 0.15 floor below — about 1 m/s
+    // along a recorded route, which then timed the state out on the way home.
+    //
+    // One-sided on purpose. Gravity pulling the way we are already braking would
+    // help, and help is not banked: climbing pays the cost, descending simply
+    // does not get a discount.
+    double along = Vector3D.Dot(gravity, dir);
+    return Math.Max(0.15, raw - Math.Max(0.0, along));
 }
 
 /// <summary>Fly toward a point, arriving with zero velocity.</summary>
@@ -2085,11 +2111,13 @@ bool UnloadToBase()
     }
 
     bool moved = false;
+    bool anyRoom = false;
     for (int d = 0; d < blockScratch.Count; d++)
     {
         IMyInventory dst = blockScratch[d].GetInventory(0);
         if (dst == null) continue;
         if ((double)dst.CurrentVolume >= (double)dst.MaxVolume * 0.99) continue;
+        anyRoom = true;
 
         for (int i = 0; i < cargo.Count; i++)
             if (DrainAll(cargo[i].GetInventory(0), dst)) moved = true;
@@ -2100,7 +2128,15 @@ bool UnloadToBase()
     }
 
     if (moved) SampleInventories();
-    return cargoFill < 0.02;
+    if (cargoFill < 0.02) return true;
+
+    // Nowhere left to put it. This method's contract is "empty, or as empty as
+    // it is going to get" — but with every base container full it returned false
+    // forever, the ship sat on the connector, and the watchdog faulted it. A full
+    // base is an ordinary situation an operator can see and fix; it should not
+    // need a fault cleared afterwards.
+    if (!anyRoom) return true;
+    return false;
 }
 
 bool DrainAll(IMyInventory src, IMyInventory dst)
@@ -2310,8 +2346,41 @@ bool ValidateJobBasis()
     return true;
 }
 
+/// <summary>
+/// Hard ceiling on the number of shafts in a job.
+///
+/// RebuildCells allocates one object per cell inside a single invocation, and
+/// nothing upstream bounded the size: `job set 200 200 40` is 40,000 allocations
+/// in one tick, which kills the block for complexity. The size is persisted, so
+/// it then kills the block again on every boot, and a dead block cannot be sent
+/// the command that would fix it. That is unrecoverable from inside the game.
+/// </summary>
+const int MAX_CELLS = 4096;
+
+/// <summary>
+/// Bring the job size inside what one tick can build. Shrinks both axes by the
+/// same factor so an oblong site keeps its shape rather than becoming a square.
+/// </summary>
+void ClampJobSize()
+{
+    job.Width = Math.Max(1, job.Width);
+    job.Height = Math.Max(1, job.Height);
+    if (job.Width * job.Height <= MAX_CELLS) return;
+
+    double scale = Math.Sqrt((double)MAX_CELLS / (job.Width * job.Height));
+    job.Width = Math.Max(1, (int)(job.Width * scale));
+    job.Height = Math.Max(1, (int)(job.Height * scale));
+    Log("Job too large — clamped to " + job.Width + "x" + job.Height);
+}
+
+/// <summary>
+/// Allocate the yield map. Every path that changes the job's shape ends up here
+/// — SetJob, 'job size', a dispatcher beacon, a pushed frame, restored Storage —
+/// which makes this the one place the size ceiling has to be enforced.
+/// </summary>
 void RebuildCells()
 {
+    ClampJobSize();
     cells = new YieldCell[job.CellCount];
     for (int i = 0; i < cells.Length; i++) cells[i] = new YieldCell();
 }
@@ -2460,13 +2529,21 @@ int NextProspect()
         Consider((scoreCursor + k) % cells.Length, ref best, ref bestScore);
     scoreCursor = (scoreCursor + window) % Math.Max(1, cells.Length);
 
-    // Nothing scored well in this window, but work remains somewhere. Take the
-    // first available cell rather than reporting the job finished — a bounded
+    // Nothing scored well in this window. Take the first cell the survey has not
+    // already written off, rather than reporting the job finished — a bounded
     // scan must never be able to end a job early.
-    if (best < 0 && RemainingCellCount() > 0)
+    //
+    // Emphatically NOT barren cells. YieldCell.Available only excludes
+    // Exhausted, Blocked and Leased, so this used to hand back every cell the
+    // survey had judged empty and dig it to full depth. That is the entire
+    // premise of this file inverted — "30 holes instead of 100" turned into
+    // digging all 100 — and because the job then never ran out of work, it also
+    // meant GrowJobTowardOre was never asked. Cells whose neighbours turn out
+    // rich still get revisited: that is Consider's job, on evidence, above.
+    if (best < 0)
     {
         for (int i = 0; i < cells.Length; i++)
-            if (cells[i].Available) return i;
+            if (cells[i].Available && cells[i].State != CellState.Barren) return i;
     }
 
     // Everything left is written off as barren. That is a finished job, not a
@@ -3340,7 +3417,8 @@ void BeginShaft()
 void StApproaching(bool entry)
 {
     if (activeCell < 0) { SetState(MinerState.Selecting); return; }
-    if (entry) { statusLine = "To shaft " + CellLabel(activeCell); SetDrills(false); }
+    // A give-up during a previous approach must not carry into this one.
+    if (entry) { statusLine = "To shaft " + CellLabel(activeCell); SetDrills(false); RearmAirspace(); }
 
     if (!HasReservesForWork()) { AbandonShaft(ShaftResult.Aborted); return; }
 
@@ -3510,6 +3588,9 @@ void StAscending(bool entry)
     {
         statusLine = "Withdrawing";
         SetDrills(drillOnRetreat);
+        // The climb needs its own wait. A timeout on the way in says nothing
+        // about whether the sky is clear on the way out.
+        RearmAirspace();
     }
 
     if (activeCell < 0) { SetState(MinerState.Selecting); return; }
@@ -3826,6 +3907,16 @@ void StServicing(bool entry)
     {
         statusLine = jobComplete ? "Job complete — docked" : "Stopped — docked";
         ReleaseDock();
+        return;
+    }
+
+    // Unloading now gives up gracefully when the base has no room, rather than
+    // stalling until the watchdog faults us. Launching on the back of that would
+    // mean going out with a full hold, filling on the first shaft and coming
+    // straight back — an undock/redock cycle all night. Sit still and say why.
+    if (CargoFull)
+    {
+        statusLine = "Hold still full — no room in base storage";
         return;
     }
 
@@ -4585,6 +4676,28 @@ void OnHeartbeat(long src, string[] f)
     r.Position = DecV(f[5]);
     r.LeasedCell = ParseInt(f[6], -1);
     r.LastSeenTick = tick;
+
+    // Renew the lease on the strength of the heartbeat.
+    //
+    // A lease is a loan against *silence*, not a stopwatch on the work. The
+    // deadline was set once at grant and never touched again, and droneTimeout*2
+    // is 60 s on stock config while a stock 40 m shaft takes 80-100 s — so every
+    // production shaft lost its cell mid-cut and had it reissued to a second
+    // drone, which then flew into the hole the first one was still in. The
+    // heartbeat already carries the cell index twice a second; this is the whole
+    // fix.
+    if (r.LeasedCell >= 0 && r.LeasedCell < cells.Length)
+    {
+        YieldCell held = cells[r.LeasedCell];
+        if (held.State == CellState.Leased && held.LeasedBy == src)
+            held.LeaseExpiresTick = tick + LeaseTicks();
+    }
+}
+
+/// <summary>How long a lease survives without a heartbeat renewing it.</summary>
+long LeaseTicks()
+{
+    return (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
 }
 
 void OnLeaseRequest(long src, string[] f)
@@ -4605,7 +4718,7 @@ void OnLeaseRequest(long src, string[] f)
 
     cells[cell].State = CellState.Leased;
     cells[cell].LeasedBy = src;
-    cells[cell].LeaseExpiresTick = tick + (long)(droneTimeout * 2 / Math.Max(dt, 0.01));
+    cells[cell].LeaseExpiresTick = tick + LeaseTicks();
     r.LeasedCell = cell;
 
     double limit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
@@ -5426,6 +5539,13 @@ void CmdStart()
         Log("Dispatching to fleet");
         return;
     }
+
+    // Servicing switches the thrusters off to charge faster, and a 'halt' from
+    // there leaves them off. CheckReadiness then refuses to start with "All
+    // thrusters switched off" and the only way out is the terminal — a dead end
+    // reached by typing two documented commands in order. Costs nothing on a
+    // ship that already had them on, because SetThrusters only writes on change.
+    SetThrusters(true);
 
     Health h = CheckReadiness();
     if (!h.Ok) { Log("Cannot start: " + h.Detail); return; }
@@ -6511,6 +6631,23 @@ bool AcquireAirspace(string section)
         lockAskTick = tick;
     }
     return false;
+}
+
+/// <summary>
+/// Begin a fresh wait for the airspace.
+///
+/// Called on entry to each phase that needs it. Without this, giving up once
+/// latches for the rest of the shaft cycle: wantLock still names the section, so
+/// AcquireAirspace never re-arms the clock and returns true unconditionally
+/// thereafter. A single busy moment during the approach would therefore disable
+/// the mutex for the climb out as well — and the climb is the half that matters,
+/// because that is where the ship comes up blind into shared sky.
+/// </summary>
+void RearmAirspace()
+{
+    if (heldLock.Length > 0) return;      // still ours; nothing to re-arm
+    wantLock = "";
+    lockOverridden = false;
 }
 
 /// <summary>Give the section back. Safe to call when we hold nothing.</summary>
