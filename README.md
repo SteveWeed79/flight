@@ -169,6 +169,9 @@ declaration alone and hand you a script that compiles into a different program.
 Anything reached through a dot is therefore off limits. `--aggressive` renames
 everything it is allowed to, for when you need the headroom.
 
+Known defects and the order they are being worked in:
+[docs/CORRECTIONS.md](docs/CORRECTIONS.md).
+
 ---
 
 ## Credits
