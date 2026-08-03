@@ -197,7 +197,11 @@ void BeginShaft()
     // Metres of rock to cut, not depth from the job plane. A resumed shaft needs
     // no special handling: the already-cut section returns no material, so
     // contact is simply detected again at the old bottom.
-    shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
+    // Solo only. With a dispatcher, OnLeaseGrant has already set this from the
+    // dispatcher's own probeDepth, which need not match ours — recomputing it
+    // here made the granted limit a dead field on the wire.
+    if (!HasDispatcher)
+        shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 
     SetState(MinerState.Approaching);
 }
@@ -223,7 +227,7 @@ void StApproaching(bool entry)
     // One drone in the shared airspace at a time. Wait where we are, squared up
     // and at our lane height, rather than improvising a hold pattern: when the
     // lock arrives we want to already be pointing the right way.
-    if (!AcquireAirspace(LOCK_SITE))
+    if (!AcquireAirspace(AirspaceSection(activeCell)))
     {
         statusLine = "Waiting for airspace";
         if (lockHoldPoint == Vector3D.Zero) lockHoldPoint = shipPos;
@@ -276,7 +280,7 @@ bool ShaftHasRock(double standoff)
 void SkipEmptyCell()
 {
     Log(CellLabel(activeCell) + " is open space — skipping");
-    RecordShaftResult(activeCell, ShaftResult.Completed, 0, 0, 0, shaftIsProbe);
+    RecordShaftResult(activeCell, ShaftResult.Completed, 0, 0, shaftIsProbe);
     if (activeCell >= 0 && activeCell < cells.Length)
         cells[activeCell].State = CellState.Barren;
     ReleaseLeaseLocal();
@@ -393,7 +397,7 @@ void StAscending(bool entry)
 
     // Ask for the airspace on the way up rather than on arrival at the top, so
     // the queue is working while we climb and the common case costs nothing.
-    bool clear = AcquireAirspace(LOCK_SITE);
+    bool clear = AcquireAirspace(AirspaceSection(activeCell));
 
     // Climb the shaft axis exactly. Any lateral drift on the way up and the ship
     // wedges itself against the wall it just cut.
@@ -442,7 +446,7 @@ void FinishShaft()
     if (shaftContactDepth < 0 && result == ShaftResult.Completed)
         Log(CellLabel(activeCell) + " never reached rock");
 
-    RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
+    RecordShaftResult(activeCell, result, ore, cut, shaftIsProbe);
     ReleaseLeaseLocal();
 
     Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
@@ -565,11 +569,32 @@ void StDocking(bool entry)
         dockNearZone = false;
         connectDebounce = 0;
         dockStallTicks = 0;
+        dockBackoffTicks = 0;
         lastDockDist = double.MaxValue;
     }
 
     if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
     if (!homeDockSet) { EnterFault("No dock recorded"); return; }
+
+    // Wait our turn at the pad. Dock slots were being requested, granted and
+    // released, and then nothing ever consulted them — so on a shared connector
+    // two drones flew the same mating run at once. Bounded like the airspace
+    // wait, because a dispatcher that stops answering must not strand a ship
+    // holding station on its last few percent of hydrogen.
+    if (HasDispatcher && dockSlots > 0 && myDockSlot < 0)
+    {
+        if (dockWaitTick == 0) dockWaitTick = tick;
+        if (tick - dockWaitTick < (long)(lockPatience / Math.Max(dt, 0.01)))
+        {
+            statusLine = "Waiting for a dock slot";
+            if (tick % 60 == 0) RequestDock();
+            Vector3D wait = homeDock.Position + homeDockForward * Math.Max(20.0, shipRadius * 5.0);
+            FlyTo(wait, dockSpeed * 3.0);
+            Orient(-homeDockForward, homeDockUp);
+            return;
+        }
+    }
+    dockWaitTick = 0;
 
     if (Docked)
     {
@@ -585,6 +610,17 @@ void StDocking(bool entry)
     double standoff = Math.Max(6.0, shipRadius * 2.0);
 
     Vector3D hold = mate + axis * standoff;
+
+    // Serving a withdrawal ordered by a stalled mating run.
+    if (dockBackoffTicks > 0)
+    {
+        dockBackoffTicks--;
+        statusLine = "Docking — backing off";
+        Orient(-axis, homeDockUp);
+        FlyTo(hold + axis * standoff - (dockConnector.GetPosition() - shipPos), dockSpeed * 3.0);
+        return;
+    }
+
     Vector3D offAxis = shipPos - mate;
     double along = Vector3D.Dot(offAxis, axis);
     double lateral = (offAxis - axis * along).Length();
@@ -652,7 +688,14 @@ void StDocking(bool entry)
         Log("Dock approach stalled at " + Fmt(mateDist, 1) + "m — backing off");
         dockRetries++;
         if (dockRetries >= 3) { EnterFault("Could not dock after 3 attempts"); return; }
-        SetState(MinerState.Inbound);
+        // Withdraw for real. Going to Inbound put the ship on a route it had
+        // already finished, so it arrived back at the connector within a tick or
+        // two and burned all three attempts in about ten seconds — from the same
+        // position, at the same angle, with the same result.
+        dockBackoffTicks = 60;
+        dockStallTicks = 0;
+        dockNearZone = false;
+        lastDockDist = double.MaxValue;
     }
 }
 
@@ -669,6 +712,10 @@ void StUnloading(bool entry)
     }
 
     if (!Docked) { SetState(MinerState.Docking); return; }
+
+    // Twice a second is plenty: conveyors move on their own clock and the scan
+    // behind this walks the base's block list.
+    if (tick % 3 != 0) return;
 
     if (UnloadToBase()) SetState(MinerState.Servicing);
 }

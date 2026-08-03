@@ -32,6 +32,8 @@ void SampleInventories()
     cargoFill = maxVol > 0 ? vol / maxVol : 0;
     cargoVolume = vol;
 
+    if (peakInventoryFill >= 0.98) peakFullTicks++; else peakFullTicks = 0;
+
     // ---- Power ------------------------------------------------------------
     double stored = 0, capacity = 0;
     for (int i = 0; i < batteries.Count; i++)
@@ -126,9 +128,22 @@ double ShaftOreSoFar()
 /// balancing contents between drills; refusing to keep mining is cheaper and
 /// fails in the safe direction.
 /// </summary>
+/// <summary>Consecutive ticks with a single inventory brimming. Counted in
+/// SampleInventories, which runs exactly once per tick — counting it inside the
+/// property would multiply it by however many callers happened to read it.</summary>
+int peakFullTicks;
+
 bool CargoFull
 {
-    get { return cargoFill >= cargoFullAt || peakInventoryFill >= 0.98; }
+    get
+    {
+        if (cargoFill >= cargoFullAt) return true;
+        // A single full inventory is the unconveyored-drill case and is real, but
+        // it also shows for one tick whenever a conveyor is mid-transfer.
+        // Requiring it to persist for a second stops a shaft being abandoned on
+        // a transient.
+        return peakFullTicks > 6;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -224,9 +239,16 @@ bool UnloadToBase()
 
     // Base containers: reachable through the terminal system while docked, but
     // explicitly not part of our own construct.
+    //
+    // Typed rather than IMyTerminalBlock-with-a-cast, because the untyped form
+    // runs the predicate against every block on the base — lights, conveyors,
+    // catwalks, all of it — and this is called at 6 Hz for as long as the ship is
+    // docked. On a large station that is the single most expensive thing the
+    // script does, and it scales with a build the script does not control.
     blockScratch.Clear();
-    GridTerminalSystem.GetBlocksOfType(blockScratch,
-        b => b is IMyCargoContainer && !b.IsSameConstructAs(Me));
+    var baseCargo = new List<IMyCargoContainer>();
+    GridTerminalSystem.GetBlocksOfType(baseCargo, b => !b.IsSameConstructAs(Me));
+    for (int i = 0; i < baseCargo.Count; i++) blockScratch.Add(baseCargo[i]);
 
     // The far connector is a valid destination in its own right and is the only
     // one that exists on a base whose storage sits behind a sorter.
@@ -326,12 +348,26 @@ void SetTanksFilling(bool filling)
 /// </summary>
 void UpdateFuelModel()
 {
-    if (hydrogenTanks.Count == 0) return;
-
     if (hydroSamplePos == Vector3D.Zero)
     {
         hydroSamplePos = shipPos;
         hydroSampleFill = hydrogenFill;
+        powerSampleFill = batteryFill;
+        return;
+    }
+
+    // Only sample while actually going somewhere. The rate is hydrogen per metre
+    // *travelled*, and this divides by straight-line displacement — so a sample
+    // that spans twenty minutes of hovering over the site, or a descent and climb
+    // back out of a shaft, charged all of that gas to whatever net distance was
+    // left over. The measured rate then read far worse than the route really
+    // costs and the ship turned for home early, every time, for good.
+    if (state == MinerState.Descending || state == MinerState.Ascending
+        || state == MinerState.Selecting || state == MinerState.Approaching)
+    {
+        hydroSamplePos = shipPos;
+        hydroSampleFill = hydrogenFill;
+        powerSampleFill = batteryFill;
         return;
     }
 
@@ -339,18 +375,32 @@ void UpdateFuelModel()
     if (travelled < 150.0) return;              // too short to mean anything
 
     double used = hydroSampleFill - hydrogenFill;
+    double usedPower = powerSampleFill - batteryFill;
     hydroSamplePos = shipPos;
     hydroSampleFill = hydrogenFill;
+    powerSampleFill = batteryFill;
 
-    // Refuelling, or a generator outpacing the thrusters. Nothing to learn.
-    if (used <= 0) return;
+    // Exponential moving average, per resource. A single leg through a gravity
+    // well is not representative of the whole route, and neither is a lazy drift
+    // in space. Negative means refuelling or recharging: nothing to learn.
+    if (used > 0 && hydrogenTanks.Count > 0)
+    {
+        double rate = used / travelled;
+        hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
+        hydroCalibrated = true;
+    }
 
-    double rate = used / travelled;
-
-    // Exponential moving average. A single leg through a gravity well is not
-    // representative of the whole route, and neither is a lazy drift in space.
-    hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
-    hydroCalibrated = true;
+    // Batteries too, because on an ion or atmospheric ship they are the only
+    // thing that runs out. Such a ship had no measured return check at all —
+    // just the fixed 30% floor, which is far too generous on a short hop and not
+    // nearly enough on a long one. Batteries recharge in flight from solar or a
+    // reactor, so a negative sample here is normal and simply teaches nothing.
+    if (usedPower > 0 && batteries.Count > 0)
+    {
+        double rate = usedPower / travelled;
+        powerPerMetre = powerCalibrated ? powerPerMetre * 0.7 + rate * 0.3 : rate;
+        powerCalibrated = true;
+    }
 }
 
 /// <summary>
@@ -369,13 +419,26 @@ double FuelToGetHome()
     return distance * hydroPerMetre * 1.6;
 }
 
-/// <summary>True when we have only just enough fuel left to reach the dock.</summary>
+/// <summary>Fraction of a full charge needed to fly the route home from here.</summary>
+double PowerToGetHome()
+{
+    if (!powerCalibrated || batteries.Count == 0) return 0;
+    double distance = DistanceHomeAlongPath();
+    if (distance <= 0) return 0;
+    return distance * powerPerMetre * 1.6;
+}
+
+/// <summary>True when we have only just enough of anything left to reach the dock.</summary>
 bool FuelCriticalForReturn()
 {
+    // Five points held back for docking manoeuvres on arrival.
     double need = FuelToGetHome();
-    if (need <= 0) return false;
-    // Five points of tank held back for docking manoeuvres on arrival.
-    return hydrogenFill < need + 0.05;
+    if (need > 0 && hydrogenFill < need + 0.05) return true;
+
+    double power = PowerToGetHome();
+    if (power > 0 && batteryFill < power + 0.05) return true;
+
+    return false;
 }
 
 bool ServiceComplete()

@@ -125,7 +125,6 @@ void Watchdog()
         // A hung shaft is almost always a stuck ship. Back out and blacklist.
         case MinerState.Descending:
         case MinerState.Ascending:
-            MarkCellStuck();
             // Must be set explicitly. FinishShaft reads pendingResult when the
             // ship clears the hole, and without this it would read whatever the
             // *previous* shaft left behind — recording a cell the ship could not

@@ -44,6 +44,16 @@ string SerializeState()
          .Append('\n');
     }
 
+    // ---- Path --------------------------------------------------------------
+    for (int i = 0; i < path.Count; i++)
+    {
+        Waypoint w = path[i];
+        b.Append("P|").Append(EncV(w.Position))
+         .Append('|').Append(EncV(w.Gravity))
+         .Append('|').Append(EncD(w.Lift))
+         .Append('\n');
+    }
+
     // ---- Yield map ---------------------------------------------------------
     b.Append("C");
     for (int i = 0; i < cells.Length; i++)
@@ -59,20 +69,9 @@ string SerializeState()
          .Append(':').Append(st)
          .Append(':').Append(EncD(c.OreKg))
          .Append(':').Append(EncD(c.MetresDrilled))
-         .Append(':').Append(EncD(c.DepthReached))
          .Append(':').Append(c.StuckCount);
     }
     b.Append('\n');
-
-    // ---- Path --------------------------------------------------------------
-    for (int i = 0; i < path.Count; i++)
-    {
-        Waypoint w = path[i];
-        b.Append("P|").Append(EncV(w.Position))
-         .Append('|').Append(EncV(w.Gravity))
-         .Append('|').Append(EncD(w.Lift))
-         .Append('\n');
-    }
 
     if (homeDockSet && homeDock != null)
     {
@@ -136,12 +135,12 @@ void LoadState()
 
                 case "P":
                     if (!versionOk || f.Length < 4) break;
-                    path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), new float[0], (float)DecD(f[3])));
+                    path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), (float)DecD(f[3])));
                     break;
 
                 case "D":
                     if (!versionOk || f.Length < 6) break;
-                    homeDock = new Waypoint(DecV(f[1]), DecV(f[4]), new float[0], (float)DecD(f[5]));
+                    homeDock = new Waypoint(DecV(f[1]), DecV(f[4]), (float)DecD(f[5]));
                     homeDockForward = DecV(f[2]);
                     homeDockUp = DecV(f[3]);
                     homeDockSet = true;
@@ -180,7 +179,13 @@ void LoadLifecycle(string[] f)
     stateEntry = true;
 
     if (saved != MinerState.Idle && saved != MinerState.Fault)
+    {
+        // And actually park. jobRunning was restored as true a few lines up, so
+        // StIdle relaunched on the very next tick — the ship flew off while the
+        // log said it was waiting to be told to continue.
+        jobRunning = false;
         Log("Resumed from " + saved + " — idling, run 'start' to continue");
+    }
 }
 
 void LoadLearned(string[] f)
@@ -219,7 +224,7 @@ void LoadCells(string[] f)
     for (int i = 1; i < f.Length; i++)
     {
         string[] p = f[i].Split(':');
-        if (p.Length < 6) continue;
+        if (p.Length < 5) continue;
 
         int idx = ParseInt(p[0], -1);
         if (idx < 0 || idx >= cells.Length) continue;
@@ -228,7 +233,6 @@ void LoadCells(string[] f)
         c.State = (CellState)ParseInt(p[1], 0);
         c.OreKg = (float)DecD(p[2]);
         c.MetresDrilled = (float)DecD(p[3]);
-        c.DepthReached = (float)DecD(p[4]);
-        c.StuckCount = ParseInt(p[5], 0);
+        c.StuckCount = ParseInt(p[4], 0);
     }
 }

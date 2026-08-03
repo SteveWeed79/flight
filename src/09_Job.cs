@@ -131,6 +131,10 @@ void RebuildCells()
 /// <summary>Cells scored per selection pass. Bounds the cost so a small-grid
 /// job with hundreds of cells cannot exceed the instruction limit.</summary>
 const int SCORE_BUDGET = 48;
+/// <summary>Half-width of the neighbourhood ScoreCell reads, in cells. The probe
+/// lattice is capped against this: a probe further away than the scorer can see
+/// is a shaft dug for nothing.</summary>
+const int SCORE_RADIUS = 2;
 /// <summary>Rotating start point for the bounded scan.</summary>
 int scoreCursor;
 
@@ -340,7 +344,13 @@ int EffectiveProbeStride()
 {
     const double TARGET_SPACING_M = 8.0;
     int byDistance = (int)Math.Round(TARGET_SPACING_M / Math.Max(0.5, job.Spacing));
-    return Math.Max(1, Math.Max(probeStride, byDistance));
+    int stride = Math.Max(1, Math.Max(probeStride, byDistance));
+
+    // ScoreCell reads a 5x5 neighbourhood, so a probe more than two cells away
+    // is invisible to every cell it was meant to inform. On a small-grid hull
+    // the distance rule alone gives a stride of 7, and the entire survey then
+    // fed nothing into the scoring — the map was built and never read.
+    return Math.Min(stride, SCORE_RADIUS * 2);
 }
 
 /// <summary>Next un-probed lattice point, nearest to the ship first.</summary>
@@ -350,6 +360,10 @@ int NextProbeCell()
     double bestDist = double.MaxValue;
     int stride = EffectiveProbeStride();
 
+    // The far edge is always included, not just multiples of the stride. Without
+    // it a job whose width is not a multiple never probes its last column, so
+    // EdgeStillRich has nothing to sample there and the grid can only ever grow
+    // one way.
     for (int row = 0; row < job.Height; row += stride)
     {
         for (int col = 0; col < job.Width; col += stride)
@@ -360,6 +374,31 @@ int NextProbeCell()
 
             double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
             if (d < bestDist) { bestDist = d; best = idx; }
+
+            // Fold in the far column on the last pass of each row.
+            if (col + stride >= job.Width && col != job.Width - 1)
+            {
+                int edge = job.IndexOf(job.Width - 1, row);
+                if (cells[edge].State == CellState.Unknown && cells[edge].Available)
+                {
+                    double de = Vector3D.DistanceSquared(
+                        job.CellMouth(job.Width - 1, row, 0), selectionOrigin);
+                    if (de < bestDist) { bestDist = de; best = edge; }
+                }
+            }
+        }
+
+        // And the far row, likewise.
+        if (row + stride >= job.Height && row != job.Height - 1)
+        {
+            for (int col = 0; col < job.Width; col += stride)
+            {
+                int edge = job.IndexOf(col, job.Height - 1);
+                if (cells[edge].State != CellState.Unknown || !cells[edge].Available) continue;
+                double de = Vector3D.DistanceSquared(
+                    job.CellMouth(col, job.Height - 1, 0), selectionOrigin);
+                if (de < bestDist) { bestDist = de; best = edge; }
+            }
         }
     }
     return best;
@@ -380,11 +419,10 @@ double ScoreCell(int idx)
 {
     int col = CellCol(idx), row = CellRow(idx);
 
-    const int RADIUS = 2;       // 5x5 neighbourhood; O(25), not O(n)
     double weighted = 0, weight = 0;
 
-    int c0 = Math.Max(0, col - RADIUS), c1 = Math.Min(job.Width - 1, col + RADIUS);
-    int r0 = Math.Max(0, row - RADIUS), r1 = Math.Min(job.Height - 1, row + RADIUS);
+    int c0 = Math.Max(0, col - SCORE_RADIUS), c1 = Math.Min(job.Width - 1, col + SCORE_RADIUS);
+    int r0 = Math.Max(0, row - SCORE_RADIUS), r1 = Math.Min(job.Height - 1, row + SCORE_RADIUS);
 
     for (int r = r0; r <= r1; r++)
     {
@@ -406,13 +444,24 @@ double ScoreCell(int idx)
     // With no evidence either way, assume slightly better than the cut-off. That
     // biases the ship toward exploring unknown ground rather than re-chewing
     // ground next to a single lucky hit.
-    double estimate = weight > 0 ? weighted / weight : barrenThreshold * 1.5;
+    // Unknown ground is worth exploring, but not more than ground already
+    // measured as workable: at 1.5x the threshold the prior outranked every real
+    // reading in the 0.8-1.2 kg/m band, so the ship preferred guesses to
+    // evidence. Just above the cut-off is enough to prefer new ground over
+    // ground already proved empty, which is all the prior is for.
+    double estimate = weight > 0 ? weighted / weight : barrenThreshold * 1.05;
 
     estimate += SightingBonus(col, row);
 
     // Travel cost, expressed in the same units as yield so they can be compared.
+    // Scaled to the site rather than fixed: at 0.004/m a 20 m site spent 0.08 on
+    // its whole width, far below the noise in a yield reading, while a 200 m one
+    // spent 0.8 — the entire barren threshold — and the ship stopped crossing the
+    // site at all. A tenth of the threshold across the site's own diagonal keeps
+    // it a tie-breaker at every scale, which is the only job it has.
     double travel = Vector3D.Distance(job.CellMouth(col, row, 0), selectionOrigin);
-    estimate -= travel * 0.004;
+    double span = Math.Max(1.0, job.Spacing * Math.Max(job.Width, job.Height));
+    estimate -= (travel / span) * barrenThreshold * 0.1;
 
     return estimate;
 }
@@ -428,8 +477,16 @@ double SightingBonus(int col, int row)
     Vector3D mouth = job.CellMouth(col, row, 0);
     double bonus = 0;
 
-    for (int i = 0; i < sightings.Count; i++)
+    // Bounded. ScoreCell is called up to 73 times per selection and this used to
+    // walk all 64 sightings each time — 4,600 vector subtractions and dot
+    // products in one invocation, on top of everything else the tick is doing,
+    // which is how a world with the ore mod installed hits the complexity limit.
+    // The newest sightings are the ones that have not been mined out yet, so
+    // walking backwards and stopping early keeps the useful half.
+    int scanned = 0;
+    for (int i = sightings.Count - 1; i >= 0 && scanned < 12; i--)
     {
+        scanned++;
         // Distance measured on the job plane only — a deposit 40 m straight down
         // is still directly under this cell and absolutely counts.
         Vector3D delta = sightings[i].Position - mouth;
@@ -605,14 +662,13 @@ double JobProgress()
 /// on a dispatcher, where those fields describe nothing at all.
 /// </summary>
 void RecordShaftResult(int idx, ShaftResult result, double oreKg, double metres,
-                       double depthReached, bool wasProbe)
+                       bool wasProbe)
 {
     if (idx < 0 || idx >= cells.Length) return;
     YieldCell cell = cells[idx];
 
     cell.OreKg += (float)oreKg;
     cell.MetresDrilled += (float)metres;
-    cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
     cell.LeasedBy = 0;
     cell.LeaseExpiresTick = 0;
 
@@ -647,17 +703,6 @@ void RecordShaftResult(int idx, ShaftResult result, double oreKg, double metres,
     }
 
     if (role == Role.Miner && dispatcherAddr != 0)
-        SendShaftReport(idx, result, oreKg, metres, depthReached, wasProbe);
+        SendShaftReport(idx, result, oreKg, metres, wasProbe);
 }
 
-/// <summary>Flag the current cell as somewhere the ship keeps getting stuck.</summary>
-void MarkCellStuck()
-{
-    if (activeCell < 0 || activeCell >= cells.Length) return;
-    cells[activeCell].StuckCount++;
-    if (cells[activeCell].StuckCount >= 3)
-    {
-        cells[activeCell].State = CellState.Blocked;
-        Log("Cell " + CellCol(activeCell) + "," + CellRow(activeCell) + " blocked");
-    }
-}

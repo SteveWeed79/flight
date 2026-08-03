@@ -115,6 +115,13 @@ void RenderMiner()
           .Append("%/km, return needs ").Append(Fmt(FuelToGetHome() * 100, 0)).Append("%\n");
     }
 
+    // On an ion or atmospheric ship this is the only reserve that matters.
+    if (powerCalibrated && hydrogenTanks.Count == 0)
+    {
+        sb.Append("Power  drain ").Append(Fmt(powerPerMetre * 100000, 2))
+          .Append("%/km, return needs ").Append(Fmt(PowerToGetHome() * 100, 0)).Append("%\n");
+    }
+
     sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 
     // Anything the ship has decided for itself gets shown. An adaptive value you
@@ -125,6 +132,7 @@ void RenderMiner()
     if (airspaceLock && HasDispatcher)
         sb.Append("Air    ").Append(heldLock.Length > 0 ? "holding " + heldLock
                   : (wantLock.Length > 0 ? "queued for " + wantLock : "clear")).Append('\n');
+
 
     if (flightActive)
         sb.Append("Nav    ").Append(Fmt(distToTarget, 1)).Append("m  ")
@@ -176,8 +184,10 @@ void RenderMap()
     if (!job.IsSet || cells.Length == 0) return;
     sb.Append('\n');
 
-    // Beyond this the map stops being readable on a normal LCD anyway.
-    if (job.Width > 64 || job.Height > 40)
+    // Beyond this the map stops being readable on a normal LCD anyway. Area as
+    // well as dimensions: 64x40 is inside both limits and still 2,600 characters
+    // of string building, every render, for something nobody can read.
+    if (job.Width > 64 || job.Height > 40 || cells.Length > 900)
     {
         sb.Append("Map too large to draw (").Append(job.Width).Append('x')
           .Append(job.Height).Append(")\n");

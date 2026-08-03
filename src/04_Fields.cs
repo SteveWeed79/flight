@@ -63,13 +63,8 @@ double derivedSpacing = 2.4;
 /// </summary>
 Vector3D selectionOrigin;
 
-/// <summary>Distinct thruster subtype ids, in a stable order. Index space for
-/// <see cref="Waypoint.ThrusterEfficiency"/>.</summary>
-readonly List<string> thrusterTypes = new List<string>();
 /// <summary>Max effective thrust per local direction: [axis 0..2, sign 0=+ 1=-].</summary>
 readonly float[,] thrustByAxis = new float[3, 2];
-/// <summary>Same, split per thruster subtype, so we can reason about atmosphere.</summary>
-readonly Dictionary<string, float[,]> thrustByType = new Dictionary<string, float[,]>();
 /// <summary>Thrusters bucketed by local push direction. Rebuilt on rescan.</summary>
 readonly List<IMyThrust>[,] thrustBuckets = new List<IMyThrust>[3, 2];
 
@@ -155,6 +150,10 @@ int connectDebounce;
 int dockStallTicks;
 /// <summary>Closest the connector has got on this approach, metres.</summary>
 double lastDockDist = double.MaxValue;
+/// <summary>Ticks left of a deliberate withdrawal after a stalled mating run.</summary>
+int dockBackoffTicks;
+/// <summary>Tick we first wanted a dock slot, so the wait for one is bounded.</summary>
+long dockWaitTick;
 
 // ---- Cargo / power --------------------------------------------------------
 double cargoFill;
@@ -186,6 +185,12 @@ bool hydroCalibrated;
 double hydroSampleFill;
 /// <summary>Where we were at the last sample point.</summary>
 Vector3D hydroSamplePos;
+/// <summary>Measured battery fraction consumed per metre travelled.</summary>
+double powerPerMetre;
+/// <summary>True once we have a usable battery drain measurement.</summary>
+bool powerCalibrated;
+/// <summary>Battery level at the last sample point.</summary>
+double powerSampleFill;
 /// <summary>Distance from waypoint 0 to waypoint i, metres. Index-aligned with <see cref="path"/>.</summary>
 double[] pathCumulative = new double[0];
 

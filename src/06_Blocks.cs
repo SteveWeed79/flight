@@ -95,11 +95,21 @@ void CollectScreens()
 {
     panels.Clear();
 
+    // Typed, so the predicate is not run against every block of whatever the ship
+    // happens to be docked to. Cockpits and consoles are providers too, so this
+    // is collected separately below rather than folded in.
+    var surfaces = new List<IMyTextPanel>();
+    GridTerminalSystem.GetBlocksOfType(surfaces, b => Mine(b) && b.CustomName.Contains(lcdTag));
+
     blockScratch.Clear();
-    GridTerminalSystem.GetBlocksOfType(blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
+    for (int i = 0; i < surfaces.Count; i++) blockScratch.Add(surfaces[i]);
 
     for (int i = 0; i < blockScratch.Count; i++)
     {
+        // The programmable block's own screen is handled below and must not be
+        // claimed here as well, or two renderers fight over one surface.
+        if (blockScratch[i] == Me) continue;
+
         var provider = blockScratch[i] as IMyTextSurfaceProvider;
         if (provider == null || provider.SurfaceCount == 0) continue;
 
@@ -162,20 +172,28 @@ void MeasureShip()
     MatrixD refInv = MatrixD.Transpose(controller.WorldMatrix.GetOrientation());
     Vector3D ctrlPos = controller.GetPosition();
 
-    double maxLateral = 0;
+    // Two passes. The centroid first, because the head's radius is its spread
+    // about its own centre — measuring the spread from the controller instead
+    // charges the head for however far off-axis it is mounted, and a drill arm
+    // slung under the nose then reports a cutting radius metres too wide. The
+    // shafts are spaced from that number, so the whole grid comes out coarse and
+    // the ship leaves uncut rock between every hole.
     Vector3D offsetSum = Vector3D.Zero;
+    for (int i = 0; i < drills.Count; i++)
+        offsetSum += Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
+    drillOffset = offsetSum / drills.Count;
 
+    double maxLateral = 0;
     for (int i = 0; i < drills.Count; i++)
     {
         Vector3D local = Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
-        double lateral = Math.Sqrt(local.X * local.X + local.Y * local.Y);
+        double dx = local.X - drillOffset.X, dy = local.Y - drillOffset.Y;
+        double lateral = Math.Sqrt(dx * dx + dy * dy);
         if (lateral > maxLateral) maxLateral = lateral;
-        offsetSum += local;
     }
 
     // The cutting face is as wide as the drill cluster plus one drill's reach.
     drillRadius = maxLateral + singleCut;
-    drillOffset = offsetSum / drills.Count;
 
     // Shaft pitch this hull would choose for itself. Overlap trades throughput
     // for how completely the rock clears.

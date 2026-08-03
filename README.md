@@ -65,10 +65,10 @@ screen and both can be pinned in config if you would rather they did not move.
 **Scales to a fleet without a rewrite.** Put a second Programmable Block at your
 base, set `role = Dispatcher`, and every miner on the channel joins
 automatically. Shaft assignments are timed leases, so a drone that explodes
-mid-shaft costs you one lease, not the job. One drone at a time manoeuvres in the
-airspace over the deposit, granted by the dispatcher with a queue behind it —
-and unlike the script that idea comes from, the airspace expires too, so a drone
-that dies holding it does not deadlock the site.
+mid-shaft costs you one lease, not the job. The site is divided into stripes and
+only one drone at a time manoeuvres over each, granted by the dispatcher with a
+queue behind it — and unlike the script that idea comes from, the grant expires,
+so a drone that dies holding one does not deadlock the ground under it.
 
 **Does not hang.** Every state has a watchdog. Stuck in a shaft, hung on a dock
 approach, waiting on a dispatcher that stopped answering — all of them recover on

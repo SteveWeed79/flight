@@ -126,7 +126,7 @@ Only meaningful with a dispatcher.
 | `droneTimeout` | `30.0` | Seconds of silence before a drone is presumed lost and its shaft reissued. |
 | `laneSpacing` | `12.0` | Metres between drone altitude lanes over the site. |
 | `dockSlots` | `1` | Dispatcher only: how many connectors are available for unloading. |
-| `airspaceLock` | `true` | One drone at a time in the airspace over the site, granted by the dispatcher with a queue behind it. |
+| `airspaceLock` | `true` | One drone at a time in the airspace over each stripe of the site, granted by the dispatcher with a queue behind it. |
 | `lockPatience` | `60.0` | Seconds a drone waits for the airspace before going anyway. Capped at half `stateTimeout`. |
 
 **`laneSpacing` must comfortably exceed the tallest drone's height.** Lanes are
@@ -135,11 +135,16 @@ that is all they do. `airspaceLock` is what actually stops two drones wanting th
 same place at the same time.
 
 **`airspaceLock` is worth leaving on.** A drone asks the dispatcher before
-crossing the site and waits its turn if somebody else is out there — inside its
-own shaft, if it is on the way up, because that is the one volume nobody else can
-be sent to. Locks expire on silence and on a hard timeout, so a drone that
-explodes holding one does not stall the deposit. `purge` releases everything by
-hand if it ever comes to that.
+crossing the site and waits its turn if somebody else is working the same stripe
+— inside its own shaft, if it is on the way up, because that is the one volume
+nobody else can be sent to. Locks expire on silence and on a hard timeout, so a
+drone that explodes holding one does not stall the deposit. `purge` releases
+everything by hand if it ever comes to that.
+
+Sections are four cell-rows wide, so a large site supports several drones working
+different stripes at once. A single site-wide section — which is what the script
+this idea came from uses — is right for a deposit a few shafts across and wrong
+for a 20x20 one, where it saturates at three or four drones and the rest queue.
 
 **`lockPatience` is a safety valve, not a tuning knob.** A dispatcher that stops
 answering must not be able to park the whole fleet in mid-air, so a drone that

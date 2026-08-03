@@ -30,6 +30,12 @@ double drillRate;
 double drillRateRefDepth;
 /// <summary>Consecutive ticks of clean cutting, i.e. keeping up with the command.</summary>
 int drillCleanTicks;
+/// <summary>Tick of the last back-off, so they cannot compound faster than the
+/// measurement they are based on.</summary>
+long drillBackoffTick;
+/// <summary>The configured derate we last seeded from, so an operator editing it
+/// and reloading is not silently ignored once a sample has been taken.</summary>
+double seededBrakeDerate = -1;
 
 /// <summary>The speed to actually descend at. One place, so the state machine
 /// never has to know whether adaptation is on.</summary>
@@ -77,16 +83,27 @@ void UpdateDrillLearning(bool cutting, double depthNow, double commanded)
     if (advance < 0 || dt <= 0) { drillCleanTicks = 0; return; }
 
     double rate = advance / dt;
-    drillRate = drillRate * 0.85 + rate * 0.15;
+    // Seed on first contact rather than filtering up from zero. Starting at zero
+    // meant the first second of every shaft looked like a total stall and cost
+    // three back-offs — 28% of the cutting speed — before the filter had caught
+    // up with a ship that was cutting perfectly well.
+    drillRate = drillRate > 0 ? drillRate * 0.85 + rate * 0.15 : rate;
 
     if (commanded < 0.05) return;
     double fraction = drillRate / commanded;
 
     if (fraction < 0.35)
     {
-        // Not cutting anything like as fast as we asked. Back off hard and start
-        // counting again from scratch.
-        learnedDrillSpeed = Math.Max(DrillSpeedFloor, learnedDrillSpeed * 0.85);
+        // Not cutting anything like as fast as we asked. Back off hard — but no
+        // more than once per second, because the filter feeding this decision has
+        // a time constant of about that. Compounding 0.85 every tick at 6 Hz
+        // drove the speed to its floor in under three seconds on evidence the
+        // measurement had not finished gathering.
+        if (tick - drillBackoffTick > 6)
+        {
+            drillBackoffTick = tick;
+            learnedDrillSpeed = Math.Max(DrillSpeedFloor, learnedDrillSpeed * 0.85);
+        }
         drillCleanTicks = 0;
         return;
     }

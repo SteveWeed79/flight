@@ -92,8 +92,13 @@ back out. It stops when the site is worked out.
 
 ## Reading the screen
 
-Name any LCD with `[VEIN]` in it and the script will use it. The Programmable
-Block's own screen is used automatically.
+Two different screens, and it is worth knowing which you are getting.
+
+The **Programmable Block's own screen** is used automatically and shows the text
+readout below. Any **LCD named with `[VEIN]`** gets the graphical dashboard
+instead — gauges and a colour yield map, not this text. If you want the text on a
+wall panel, read it off the block's own screen, or turn `verboseEcho` on and open
+the block's detail panel.
 
 ```
 VEIN 1.1.0  Miner  [solo]

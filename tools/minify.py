@@ -56,6 +56,11 @@ LIMIT = 100000
 # Aim under the ceiling rather than at it. A build that fits by fifty characters
 # is a build the next commit breaks, and the cost of the margin is a handful of
 # extra identifiers renamed.
+#
+# Note for anyone reading the build output: "N chars spare" is this margin, not a
+# measurement of how much room is left. The renamer stops as soon as it fits, so
+# the figure reads about the same whatever you write. Run --aggressive to see the
+# real headroom, which is several times larger.
 MARGIN = 2000
 
 # Never rename these: the game calls them, or they are part of an API contract.
@@ -298,6 +303,29 @@ def split_code_and_strings(text):
     n = len(text)
     while i < n:
         c = text[i]
+
+        # Verbatim string. Backslash is not an escape here and "" is a literal
+        # quote, so the ordinary scanner below would stop at the wrong place and
+        # hand back a literal that is not one — silently, and in the same pass
+        # that produces the verification key, so the self-check could not see it.
+        if c == "@" and text[i + 1 : i + 2] == '"':
+            segments.append((True, "".join(buf)))
+            buf = []
+            lit = ['@', '"']
+            i += 2
+            while i < n:
+                if text[i] == '"' and text[i + 1 : i + 2] == '"':
+                    lit.append('""')
+                    i += 2
+                    continue
+                lit.append(text[i])
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            segments.append((False, "".join(lit)))
+            continue
+
         if c == '"' or c == "'":
             segments.append((True, "".join(buf)))
             buf = []

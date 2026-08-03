@@ -16,12 +16,6 @@ public class Waypoint
     public Vector3D Position;
     /// <summary>Natural gravity vector here. Zero means space.</summary>
     public Vector3D Gravity;
-    /// <summary>
-    /// Effectiveness of each thruster type at this altitude, indexed by
-    /// <see cref="Program.thrusterTypes"/>. Atmospheric thrusters read ~0 in
-    /// orbit; ion thrusters read ~0.3 at sea level. Diagnostic only.
-    /// </summary>
-    public float[] ThrusterEfficiency;
 
     /// <summary>
     /// Newtons of thrust available straight up against gravity, measured here.
@@ -32,11 +26,10 @@ public class Waypoint
 
     public Waypoint() { }
 
-    public Waypoint(Vector3D pos, Vector3D grav, float[] eff, float lift)
+    public Waypoint(Vector3D pos, Vector3D grav, float lift)
     {
         Position = pos;
         Gravity = grav;
-        ThrusterEfficiency = eff;
         Lift = lift;
     }
 
@@ -104,8 +97,6 @@ public class YieldCell
     public float OreKg;
     /// <summary>Total metres drilled here.</summary>
     public float MetresDrilled;
-    /// <summary>Deepest we have got, metres. Lets us resume a half-dug shaft.</summary>
-    public float DepthReached;
     /// <summary>Which drone holds this cell, 0 = nobody.</summary>
     public long LeasedBy;
     /// <summary>Tick at which an unrenewed lease expires.</summary>

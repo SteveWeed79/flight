@@ -73,7 +73,7 @@ namespace VEIN
          *//////////////////////////////////////////////////////////////////////////////
 
         const string VEIN_VERSION = "1.1.0";
-        const string STORAGE_REV  = "3";   // bump on ANY change to a persisted enum or field order
+        const string STORAGE_REV  = "4";   // bump on ANY change to a persisted enum or field order
         #endregion
 
         #region 01_Enums.cs
@@ -204,12 +204,6 @@ namespace VEIN
             public Vector3D Position;
             /// <summary>Natural gravity vector here. Zero means space.</summary>
             public Vector3D Gravity;
-            /// <summary>
-            /// Effectiveness of each thruster type at this altitude, indexed by
-            /// <see cref="Program.thrusterTypes"/>. Atmospheric thrusters read ~0 in
-            /// orbit; ion thrusters read ~0.3 at sea level. Diagnostic only.
-            /// </summary>
-            public float[] ThrusterEfficiency;
 
             /// <summary>
             /// Newtons of thrust available straight up against gravity, measured here.
@@ -220,11 +214,10 @@ namespace VEIN
 
             public Waypoint() { }
 
-            public Waypoint(Vector3D pos, Vector3D grav, float[] eff, float lift)
+            public Waypoint(Vector3D pos, Vector3D grav, float lift)
             {
                 Position = pos;
                 Gravity = grav;
-                ThrusterEfficiency = eff;
                 Lift = lift;
             }
 
@@ -292,8 +285,6 @@ namespace VEIN
             public float OreKg;
             /// <summary>Total metres drilled here.</summary>
             public float MetresDrilled;
-            /// <summary>Deepest we have got, metres. Lets us resume a half-dug shaft.</summary>
-            public float DepthReached;
             /// <summary>Which drone holds this cell, 0 = nobody.</summary>
             public long LeasedBy;
             /// <summary>Tick at which an unrenewed lease expires.</summary>
@@ -366,9 +357,11 @@ namespace VEIN
         //  CONFIGURATION
         //
         //  Everything lives in the Programmable Block's Custom Data as INI. Edit it,
-        //  then run the "reload" argument (or just recompile). Unknown keys are left
-        //  alone; missing keys are written back with their defaults, so the block always
-        //  documents itself.
+        //  then run the "reload" argument (or just recompile). Missing keys are written
+        //  back with their defaults, so the block always documents itself.
+        //
+        //  Note that the write-back is a full rewrite: keys VEIN does not recognise are
+        //  dropped, so Custom Data is not a place to keep your own notes.
         // ============================================================================
 
         // ---- Identity -------------------------------------------------------------
@@ -559,7 +552,17 @@ namespace VEIN
             // reload to change an unrelated key must not throw away an hour of the ship
             // measuring itself. 'learn reset' is the way to deliberately start over.
             if (learnedDrillSpeed <= 0) learnedDrillSpeed = drillSpeed;
-            if (brakeSamples == 0) brakeDerate = configBrakeDerate;
+
+            // Re-seed when the operator has actually changed the figure, not only when
+            // nothing has been learned yet. Editing brakeDerate and running 'reload' did
+            // nothing at all once a single approach had been measured, which makes it
+            // look like a knob that is not wired up.
+            if (brakeSamples == 0 || configBrakeDerate != seededBrakeDerate)
+            {
+                brakeDerate = configBrakeDerate;
+                if (seededBrakeDerate >= 0 && configBrakeDerate != seededBrakeDerate) brakeSamples = 0;
+                seededBrakeDerate = configBrakeDerate;
+            }
 
             WriteConfig();
         }
@@ -765,13 +768,8 @@ namespace VEIN
         /// </summary>
         Vector3D selectionOrigin;
 
-        /// <summary>Distinct thruster subtype ids, in a stable order. Index space for
-        /// <see cref="Waypoint.ThrusterEfficiency"/>.</summary>
-        readonly List<string> thrusterTypes = new List<string>();
         /// <summary>Max effective thrust per local direction: [axis 0..2, sign 0=+ 1=-].</summary>
         readonly float[,] thrustByAxis = new float[3, 2];
-        /// <summary>Same, split per thruster subtype, so we can reason about atmosphere.</summary>
-        readonly Dictionary<string, float[,]> thrustByType = new Dictionary<string, float[,]>();
         /// <summary>Thrusters bucketed by local push direction. Rebuilt on rescan.</summary>
         readonly List<IMyThrust>[,] thrustBuckets = new List<IMyThrust>[3, 2];
 
@@ -857,6 +855,10 @@ namespace VEIN
         int dockStallTicks;
         /// <summary>Closest the connector has got on this approach, metres.</summary>
         double lastDockDist = double.MaxValue;
+        /// <summary>Ticks left of a deliberate withdrawal after a stalled mating run.</summary>
+        int dockBackoffTicks;
+        /// <summary>Tick we first wanted a dock slot, so the wait for one is bounded.</summary>
+        long dockWaitTick;
 
         // ---- Cargo / power --------------------------------------------------------
         double cargoFill;
@@ -888,6 +890,12 @@ namespace VEIN
         double hydroSampleFill;
         /// <summary>Where we were at the last sample point.</summary>
         Vector3D hydroSamplePos;
+        /// <summary>Measured battery fraction consumed per metre travelled.</summary>
+        double powerPerMetre;
+        /// <summary>True once we have a usable battery drain measurement.</summary>
+        bool powerCalibrated;
+        /// <summary>Battery level at the last sample point.</summary>
+        double powerSampleFill;
         /// <summary>Distance from waypoint 0 to waypoint i, metres. Index-aligned with <see cref="path"/>.</summary>
         double[] pathCumulative = new double[0];
 
@@ -1069,7 +1077,6 @@ namespace VEIN
                 // A hung shaft is almost always a stuck ship. Back out and blacklist.
                 case MinerState.Descending:
                 case MinerState.Ascending:
-                    MarkCellStuck();
                     // Must be set explicitly. FinishShaft reads pendingResult when the
                     // ship clears the hole, and without this it would read whatever the
                     // *previous* shaft left behind — recording a cell the ship could not
@@ -1280,11 +1287,21 @@ namespace VEIN
         {
             panels.Clear();
 
+            // Typed, so the predicate is not run against every block of whatever the ship
+            // happens to be docked to. Cockpits and consoles are providers too, so this
+            // is collected separately below rather than folded in.
+            var surfaces = new List<IMyTextPanel>();
+            GridTerminalSystem.GetBlocksOfType(surfaces, b => Mine(b) && b.CustomName.Contains(lcdTag));
+
             blockScratch.Clear();
-            GridTerminalSystem.GetBlocksOfType(blockScratch, b => Mine(b) && b.CustomName.Contains(lcdTag));
+            for (int i = 0; i < surfaces.Count; i++) blockScratch.Add(surfaces[i]);
 
             for (int i = 0; i < blockScratch.Count; i++)
             {
+                // The programmable block's own screen is handled below and must not be
+                // claimed here as well, or two renderers fight over one surface.
+                if (blockScratch[i] == Me) continue;
+
                 var provider = blockScratch[i] as IMyTextSurfaceProvider;
                 if (provider == null || provider.SurfaceCount == 0) continue;
 
@@ -1347,20 +1364,28 @@ namespace VEIN
             MatrixD refInv = MatrixD.Transpose(controller.WorldMatrix.GetOrientation());
             Vector3D ctrlPos = controller.GetPosition();
 
-            double maxLateral = 0;
+            // Two passes. The centroid first, because the head's radius is its spread
+            // about its own centre — measuring the spread from the controller instead
+            // charges the head for however far off-axis it is mounted, and a drill arm
+            // slung under the nose then reports a cutting radius metres too wide. The
+            // shafts are spaced from that number, so the whole grid comes out coarse and
+            // the ship leaves uncut rock between every hole.
             Vector3D offsetSum = Vector3D.Zero;
+            for (int i = 0; i < drills.Count; i++)
+                offsetSum += Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
+            drillOffset = offsetSum / drills.Count;
 
+            double maxLateral = 0;
             for (int i = 0; i < drills.Count; i++)
             {
                 Vector3D local = Vector3D.TransformNormal(drills[i].GetPosition() - ctrlPos, refInv);
-                double lateral = Math.Sqrt(local.X * local.X + local.Y * local.Y);
+                double dx = local.X - drillOffset.X, dy = local.Y - drillOffset.Y;
+                double lateral = Math.Sqrt(dx * dx + dy * dy);
                 if (lateral > maxLateral) maxLateral = lateral;
-                offsetSum += local;
             }
 
             // The cutting face is as wide as the drill cluster plus one drill's reach.
             drillRadius = maxLateral + singleCut;
-            drillOffset = offsetSum / drills.Count;
 
             // Shaft pitch this hull would choose for itself. Overlap trades throughput
             // for how completely the rock clears.
@@ -1450,10 +1475,7 @@ namespace VEIN
         /// and marks anything above 0.80 as risky in its own UI, while SCAM ships a
         /// StoppingPowerQuotient of 0.50. Neither number is derived; both come from
         /// watching real ships overshoot. VEIN sat at 0.75 — more aggressive than
-        /// either — purely because nothing had contradicted it yet. VEIN is already
-        /// pessimistic in gravity, where it subtracts the full gravity magnitude from
-        /// available deceleration, but in space that subtraction is zero and this is the
-        /// only margin there is.
+        /// either — purely because nothing had contradicted it yet.
         ///
         /// This is now only the *starting point*. The ship measures how much of its
         /// braking authority approaches genuinely demand and moves the figure to suit
@@ -1472,8 +1494,6 @@ namespace VEIN
                     else thrustBuckets[a, s].Clear();
                 }
 
-            thrusterTypes.Clear();
-            thrustByType.Clear();
             if (controller == null) return;
 
             MatrixD inv = MatrixD.Transpose(controller.WorldMatrix.GetOrientation());
@@ -1495,16 +1515,8 @@ namespace VEIN
                 double component = axis == 0 ? push.X : (axis == 1 ? push.Y : push.Z);
                 int sign = component >= 0 ? 0 : 1;
                 thrustBuckets[axis, sign].Add(t);
-
-                string type = t.BlockDefinition.SubtypeId;
-                if (!thrustByType.ContainsKey(type))
-                {
-                    thrustByType[type] = new float[3, 2];
-                    thrusterTypes.Add(type);
-                }
             }
 
-            thrusterTypes.Sort();  // stable index space for waypoint efficiency arrays
             RefreshThrustCapacity();
         }
 
@@ -1520,12 +1532,6 @@ namespace VEIN
                 for (int s = 0; s < 2; s++)
                     thrustByAxis[a, s] = 0f;
 
-            foreach (var kv in thrustByType)
-            {
-                float[,] m = kv.Value;
-                for (int a = 0; a < 3; a++) for (int s = 0; s < 2; s++) m[a, s] = 0f;
-            }
-
             for (int a = 0; a < 3; a++)
                 for (int s = 0; s < 2; s++)
                 {
@@ -1536,10 +1542,6 @@ namespace VEIN
                         IMyThrust t = bucket[i];
                         if (!t.IsFunctional || !t.Enabled) continue;
                         thrustByAxis[a, s] += t.MaxEffectiveThrust;
-
-                        float[,] typeMap;
-                        if (thrustByType.TryGetValue(t.BlockDefinition.SubtypeId, out typeMap))
-                            typeMap[a, s] += t.MaxEffectiveThrust;
                     }
                 }
         }
@@ -1572,9 +1574,7 @@ namespace VEIN
 
         /// <summary>
         /// Deceleration we can actually achieve while travelling along
-        /// <paramref name="dir"/>. Deliberately pessimistic — it assumes gravity is
-        /// working against us in full, whatever direction we are pointing. Being
-        /// conservative here costs a little speed and buys a lot of not-crashing.
+        /// <paramref name="dir"/>.
         /// </summary>
         double StoppingAccel(Vector3D dir)
         {
@@ -1598,6 +1598,25 @@ namespace VEIN
         /// <summary>Fly toward a point, arriving with zero velocity.</summary>
         void FlyTo(Vector3D target, double maxSpeed)
         {
+            FlyTo(target, maxSpeed, 0.0);
+        }
+
+        /// <summary>
+        /// Fly toward a point, with <paramref name="runOut"/> metres of usable travel
+        /// beyond it before the ship actually has to be stopped.
+        ///
+        /// Following a recorded route, the next waypoint is a corridor marker, not a
+        /// destination. Braking for it pinned route speed at sqrt(2*a*spacing) — about
+        /// 8 m/s on a 10 m recording interval — whatever cruiseSpeed was set to, and
+        /// cruiseSpeed was therefore unreachable by construction.
+        ///
+        /// The aim point deliberately stays near. Aiming at a point far down the route
+        /// would let the ship cut the corner off the path a human flew to avoid a
+        /// mountain, which is the whole reason the route exists. Only the *speed* looks
+        /// further ahead.
+        /// </summary>
+        void FlyTo(Vector3D target, double maxSpeed, double runOut)
+        {
             flightActive = true;
 
             if (controller == null) return;
@@ -1609,14 +1628,18 @@ namespace VEIN
 
             // Speed we could still shed before arriving: v = sqrt(2 a d).
             double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-            double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BrakeDerateNow();
+            double brakeFrom = Math.Max(0.0, distToTarget + Math.Max(0.0, runOut));
+            double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * brakeFrom) * BrakeDerateNow();
 
             double want = Math.Min(maxSpeed, arrivalSpeed);
 
             // Closing speed along the approach, not total speed: lateral drift is the
             // controller's problem, not the stopping distance's. Sampled here because
             // this is the one place that knows both the geometry and the capability.
-            UpdateBrakeLearning(arrivalSpeed < maxSpeed, distToTarget,
+            // Only a genuine arrival teaches anything. A fly-through has run-out and so
+            // is not arrival-limited, which is exactly the distinction the learner could
+            // not previously draw.
+            UpdateBrakeLearning(arrivalSpeed < maxSpeed && runOut <= 0.0, distToTarget,
                                 Vector3D.Dot(shipVel, dir), stopAccel);
 
             // Do not travel fast while still swinging round. PAM does the same thing and
@@ -1625,8 +1648,10 @@ namespace VEIN
             // sideways into whatever it is approaching. Full speed by 20 degrees.
             if (alignError > 20.0) want *= Math.Max(0.15, 1.0 - (alignError - 20.0) / 70.0);
 
-            // Never command more than the server will honour anyway.
-            want = Math.Min(want, 95.0);
+            // Never command more than the server will honour anyway. Vanilla tops out at
+            // 100 m/s; a speed mod raises it, and cruiseSpeed accepts up to 300, so an
+            // operator who has raised both should not be silently held at 95.
+            want = Math.Min(want, Math.Max(95.0, cruiseSpeed));
 
             SetVelocity(dir * want);
         }
@@ -1651,14 +1676,16 @@ namespace VEIN
             const double TAU = 0.45;
             Vector3D desiredAccel = velError / TAU;
 
-            // Do not ask for more acceleration than we own.
-            double accelCap = ThrustAlong(desiredAccel) / Math.Max(1.0, shipMass);
-            if (accelCap > 0 && desiredAccel.Length() > accelCap)
-                desiredAccel = Vector3D.Normalize(desiredAccel) * accelCap;
+            // Hold station against gravity on top of whatever manoeuvre we wanted. The
+            // cap goes on the total, because the total is what the thrusters are asked
+            // for. Capping the manoeuvre alone and then adding gravity compensation on
+            // top let the sum saturate, and ApplyAxis clamps the sum — which quietly
+            // takes the shortfall out of holding the ship up.
+            Vector3D total = desiredAccel - gravity;
+            double cap = ThrustAlong(total) / Math.Max(1.0, shipMass);
+            if (cap > 0 && total.Length() > cap) total = Vector3D.Normalize(total) * cap;
 
-            // Hold station against gravity on top of whatever manoeuvre we wanted.
-            Vector3D force = (desiredAccel - gravity) * shipMass;
-            ApplyForce(force);
+            ApplyForce(total * shipMass);
         }
 
         /// <summary>Distribute a world-space force across the thruster buckets.</summary>
@@ -1749,7 +1776,7 @@ namespace VEIN
             // and the ship sits there perfectly still at maximum error until the
             // watchdog gives up. Nudge it off the singularity with any perpendicular
             // axis; one tick later the normal control has a gradient to work with.
-            if (errAxis.LengthSquared() < 1e-6 && alignError > 90.0)
+            if (errAxis.LengthSquared() < 1e-4 && alignError > 90.0)
             {
                 Vector3D seed = Math.Abs(m.Forward.Z) < 0.9 ? Vector3D.Forward : Vector3D.Right;
                 errAxis = Vector3D.Normalize(Vector3D.Cross(m.Forward, seed));
@@ -1923,6 +1950,8 @@ namespace VEIN
             cargoFill = maxVol > 0 ? vol / maxVol : 0;
             cargoVolume = vol;
 
+            if (peakInventoryFill >= 0.98) peakFullTicks++; else peakFullTicks = 0;
+
             // ---- Power ------------------------------------------------------------
             double stored = 0, capacity = 0;
             for (int i = 0; i < batteries.Count; i++)
@@ -2017,9 +2046,22 @@ namespace VEIN
         /// balancing contents between drills; refusing to keep mining is cheaper and
         /// fails in the safe direction.
         /// </summary>
+        /// <summary>Consecutive ticks with a single inventory brimming. Counted in
+        /// SampleInventories, which runs exactly once per tick — counting it inside the
+        /// property would multiply it by however many callers happened to read it.</summary>
+        int peakFullTicks;
+
         bool CargoFull
         {
-            get { return cargoFill >= cargoFullAt || peakInventoryFill >= 0.98; }
+            get
+            {
+                if (cargoFill >= cargoFullAt) return true;
+                // A single full inventory is the unconveyored-drill case and is real, but
+                // it also shows for one tick whenever a conveyor is mid-transfer.
+                // Requiring it to persist for a second stops a shaft being abandoned on
+                // a transient.
+                return peakFullTicks > 6;
+            }
         }
 
         // ---------------------------------------------------------------------------
@@ -2115,9 +2157,16 @@ namespace VEIN
 
             // Base containers: reachable through the terminal system while docked, but
             // explicitly not part of our own construct.
+            //
+            // Typed rather than IMyTerminalBlock-with-a-cast, because the untyped form
+            // runs the predicate against every block on the base — lights, conveyors,
+            // catwalks, all of it — and this is called at 6 Hz for as long as the ship is
+            // docked. On a large station that is the single most expensive thing the
+            // script does, and it scales with a build the script does not control.
             blockScratch.Clear();
-            GridTerminalSystem.GetBlocksOfType(blockScratch,
-                b => b is IMyCargoContainer && !b.IsSameConstructAs(Me));
+            var baseCargo = new List<IMyCargoContainer>();
+            GridTerminalSystem.GetBlocksOfType(baseCargo, b => !b.IsSameConstructAs(Me));
+            for (int i = 0; i < baseCargo.Count; i++) blockScratch.Add(baseCargo[i]);
 
             // The far connector is a valid destination in its own right and is the only
             // one that exists on a base whose storage sits behind a sorter.
@@ -2217,12 +2266,26 @@ namespace VEIN
         /// </summary>
         void UpdateFuelModel()
         {
-            if (hydrogenTanks.Count == 0) return;
-
             if (hydroSamplePos == Vector3D.Zero)
             {
                 hydroSamplePos = shipPos;
                 hydroSampleFill = hydrogenFill;
+                powerSampleFill = batteryFill;
+                return;
+            }
+
+            // Only sample while actually going somewhere. The rate is hydrogen per metre
+            // *travelled*, and this divides by straight-line displacement — so a sample
+            // that spans twenty minutes of hovering over the site, or a descent and climb
+            // back out of a shaft, charged all of that gas to whatever net distance was
+            // left over. The measured rate then read far worse than the route really
+            // costs and the ship turned for home early, every time, for good.
+            if (state == MinerState.Descending || state == MinerState.Ascending
+                || state == MinerState.Selecting || state == MinerState.Approaching)
+            {
+                hydroSamplePos = shipPos;
+                hydroSampleFill = hydrogenFill;
+                powerSampleFill = batteryFill;
                 return;
             }
 
@@ -2230,18 +2293,32 @@ namespace VEIN
             if (travelled < 150.0) return;              // too short to mean anything
 
             double used = hydroSampleFill - hydrogenFill;
+            double usedPower = powerSampleFill - batteryFill;
             hydroSamplePos = shipPos;
             hydroSampleFill = hydrogenFill;
+            powerSampleFill = batteryFill;
 
-            // Refuelling, or a generator outpacing the thrusters. Nothing to learn.
-            if (used <= 0) return;
+            // Exponential moving average, per resource. A single leg through a gravity
+            // well is not representative of the whole route, and neither is a lazy drift
+            // in space. Negative means refuelling or recharging: nothing to learn.
+            if (used > 0 && hydrogenTanks.Count > 0)
+            {
+                double rate = used / travelled;
+                hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
+                hydroCalibrated = true;
+            }
 
-            double rate = used / travelled;
-
-            // Exponential moving average. A single leg through a gravity well is not
-            // representative of the whole route, and neither is a lazy drift in space.
-            hydroPerMetre = hydroCalibrated ? hydroPerMetre * 0.7 + rate * 0.3 : rate;
-            hydroCalibrated = true;
+            // Batteries too, because on an ion or atmospheric ship they are the only
+            // thing that runs out. Such a ship had no measured return check at all —
+            // just the fixed 30% floor, which is far too generous on a short hop and not
+            // nearly enough on a long one. Batteries recharge in flight from solar or a
+            // reactor, so a negative sample here is normal and simply teaches nothing.
+            if (usedPower > 0 && batteries.Count > 0)
+            {
+                double rate = usedPower / travelled;
+                powerPerMetre = powerCalibrated ? powerPerMetre * 0.7 + rate * 0.3 : rate;
+                powerCalibrated = true;
+            }
         }
 
         /// <summary>
@@ -2260,13 +2337,26 @@ namespace VEIN
             return distance * hydroPerMetre * 1.6;
         }
 
-        /// <summary>True when we have only just enough fuel left to reach the dock.</summary>
+        /// <summary>Fraction of a full charge needed to fly the route home from here.</summary>
+        double PowerToGetHome()
+        {
+            if (!powerCalibrated || batteries.Count == 0) return 0;
+            double distance = DistanceHomeAlongPath();
+            if (distance <= 0) return 0;
+            return distance * powerPerMetre * 1.6;
+        }
+
+        /// <summary>True when we have only just enough of anything left to reach the dock.</summary>
         bool FuelCriticalForReturn()
         {
+            // Five points held back for docking manoeuvres on arrival.
             double need = FuelToGetHome();
-            if (need <= 0) return false;
-            // Five points of tank held back for docking manoeuvres on arrival.
-            return hydrogenFill < need + 0.05;
+            if (need > 0 && hydrogenFill < need + 0.05) return true;
+
+            double power = PowerToGetHome();
+            if (power > 0 && batteryFill < power + 0.05) return true;
+
+            return false;
         }
 
         bool ServiceComplete()
@@ -2409,6 +2499,10 @@ namespace VEIN
         /// <summary>Cells scored per selection pass. Bounds the cost so a small-grid
         /// job with hundreds of cells cannot exceed the instruction limit.</summary>
         const int SCORE_BUDGET = 48;
+        /// <summary>Half-width of the neighbourhood ScoreCell reads, in cells. The probe
+        /// lattice is capped against this: a probe further away than the scorer can see
+        /// is a shaft dug for nothing.</summary>
+        const int SCORE_RADIUS = 2;
         /// <summary>Rotating start point for the bounded scan.</summary>
         int scoreCursor;
 
@@ -2618,7 +2712,13 @@ namespace VEIN
         {
             const double TARGET_SPACING_M = 8.0;
             int byDistance = (int)Math.Round(TARGET_SPACING_M / Math.Max(0.5, job.Spacing));
-            return Math.Max(1, Math.Max(probeStride, byDistance));
+            int stride = Math.Max(1, Math.Max(probeStride, byDistance));
+
+            // ScoreCell reads a 5x5 neighbourhood, so a probe more than two cells away
+            // is invisible to every cell it was meant to inform. On a small-grid hull
+            // the distance rule alone gives a stride of 7, and the entire survey then
+            // fed nothing into the scoring — the map was built and never read.
+            return Math.Min(stride, SCORE_RADIUS * 2);
         }
 
         /// <summary>Next un-probed lattice point, nearest to the ship first.</summary>
@@ -2628,6 +2728,10 @@ namespace VEIN
             double bestDist = double.MaxValue;
             int stride = EffectiveProbeStride();
 
+            // The far edge is always included, not just multiples of the stride. Without
+            // it a job whose width is not a multiple never probes its last column, so
+            // EdgeStillRich has nothing to sample there and the grid can only ever grow
+            // one way.
             for (int row = 0; row < job.Height; row += stride)
             {
                 for (int col = 0; col < job.Width; col += stride)
@@ -2638,6 +2742,31 @@ namespace VEIN
 
                     double d = Vector3D.DistanceSquared(job.CellMouth(col, row, 0), selectionOrigin);
                     if (d < bestDist) { bestDist = d; best = idx; }
+
+                    // Fold in the far column on the last pass of each row.
+                    if (col + stride >= job.Width && col != job.Width - 1)
+                    {
+                        int edge = job.IndexOf(job.Width - 1, row);
+                        if (cells[edge].State == CellState.Unknown && cells[edge].Available)
+                        {
+                            double de = Vector3D.DistanceSquared(
+                                job.CellMouth(job.Width - 1, row, 0), selectionOrigin);
+                            if (de < bestDist) { bestDist = de; best = edge; }
+                        }
+                    }
+                }
+
+                // And the far row, likewise.
+                if (row + stride >= job.Height && row != job.Height - 1)
+                {
+                    for (int col = 0; col < job.Width; col += stride)
+                    {
+                        int edge = job.IndexOf(col, job.Height - 1);
+                        if (cells[edge].State != CellState.Unknown || !cells[edge].Available) continue;
+                        double de = Vector3D.DistanceSquared(
+                            job.CellMouth(col, job.Height - 1, 0), selectionOrigin);
+                        if (de < bestDist) { bestDist = de; best = edge; }
+                    }
                 }
             }
             return best;
@@ -2658,11 +2787,10 @@ namespace VEIN
         {
             int col = CellCol(idx), row = CellRow(idx);
 
-            const int RADIUS = 2;       // 5x5 neighbourhood; O(25), not O(n)
             double weighted = 0, weight = 0;
 
-            int c0 = Math.Max(0, col - RADIUS), c1 = Math.Min(job.Width - 1, col + RADIUS);
-            int r0 = Math.Max(0, row - RADIUS), r1 = Math.Min(job.Height - 1, row + RADIUS);
+            int c0 = Math.Max(0, col - SCORE_RADIUS), c1 = Math.Min(job.Width - 1, col + SCORE_RADIUS);
+            int r0 = Math.Max(0, row - SCORE_RADIUS), r1 = Math.Min(job.Height - 1, row + SCORE_RADIUS);
 
             for (int r = r0; r <= r1; r++)
             {
@@ -2684,13 +2812,24 @@ namespace VEIN
             // With no evidence either way, assume slightly better than the cut-off. That
             // biases the ship toward exploring unknown ground rather than re-chewing
             // ground next to a single lucky hit.
-            double estimate = weight > 0 ? weighted / weight : barrenThreshold * 1.5;
+            // Unknown ground is worth exploring, but not more than ground already
+            // measured as workable: at 1.5x the threshold the prior outranked every real
+            // reading in the 0.8-1.2 kg/m band, so the ship preferred guesses to
+            // evidence. Just above the cut-off is enough to prefer new ground over
+            // ground already proved empty, which is all the prior is for.
+            double estimate = weight > 0 ? weighted / weight : barrenThreshold * 1.05;
 
             estimate += SightingBonus(col, row);
 
             // Travel cost, expressed in the same units as yield so they can be compared.
+            // Scaled to the site rather than fixed: at 0.004/m a 20 m site spent 0.08 on
+            // its whole width, far below the noise in a yield reading, while a 200 m one
+            // spent 0.8 — the entire barren threshold — and the ship stopped crossing the
+            // site at all. A tenth of the threshold across the site's own diagonal keeps
+            // it a tie-breaker at every scale, which is the only job it has.
             double travel = Vector3D.Distance(job.CellMouth(col, row, 0), selectionOrigin);
-            estimate -= travel * 0.004;
+            double span = Math.Max(1.0, job.Spacing * Math.Max(job.Width, job.Height));
+            estimate -= (travel / span) * barrenThreshold * 0.1;
 
             return estimate;
         }
@@ -2706,8 +2845,16 @@ namespace VEIN
             Vector3D mouth = job.CellMouth(col, row, 0);
             double bonus = 0;
 
-            for (int i = 0; i < sightings.Count; i++)
+            // Bounded. ScoreCell is called up to 73 times per selection and this used to
+            // walk all 64 sightings each time — 4,600 vector subtractions and dot
+            // products in one invocation, on top of everything else the tick is doing,
+            // which is how a world with the ore mod installed hits the complexity limit.
+            // The newest sightings are the ones that have not been mined out yet, so
+            // walking backwards and stopping early keeps the useful half.
+            int scanned = 0;
+            for (int i = sightings.Count - 1; i >= 0 && scanned < 12; i--)
             {
+                scanned++;
                 // Distance measured on the job plane only — a deposit 40 m straight down
                 // is still directly under this cell and absolutely counts.
                 Vector3D delta = sightings[i].Position - mouth;
@@ -2883,14 +3030,13 @@ namespace VEIN
         /// on a dispatcher, where those fields describe nothing at all.
         /// </summary>
         void RecordShaftResult(int idx, ShaftResult result, double oreKg, double metres,
-                               double depthReached, bool wasProbe)
+                               bool wasProbe)
         {
             if (idx < 0 || idx >= cells.Length) return;
             YieldCell cell = cells[idx];
 
             cell.OreKg += (float)oreKg;
             cell.MetresDrilled += (float)metres;
-            cell.DepthReached = Math.Max(cell.DepthReached, (float)depthReached);
             cell.LeasedBy = 0;
             cell.LeaseExpiresTick = 0;
 
@@ -2925,19 +3071,7 @@ namespace VEIN
             }
 
             if (role == Role.Miner && dispatcherAddr != 0)
-                SendShaftReport(idx, result, oreKg, metres, depthReached, wasProbe);
-        }
-
-        /// <summary>Flag the current cell as somewhere the ship keeps getting stuck.</summary>
-        void MarkCellStuck()
-        {
-            if (activeCell < 0 || activeCell >= cells.Length) return;
-            cells[activeCell].StuckCount++;
-            if (cells[activeCell].StuckCount >= 3)
-            {
-                cells[activeCell].State = CellState.Blocked;
-                Log("Cell " + CellCol(activeCell) + "," + CellRow(activeCell) + " blocked");
-            }
+                SendShaftReport(idx, result, oreKg, metres, wasProbe);
         }
         #endregion
 
@@ -2990,7 +3124,7 @@ namespace VEIN
             if (dockConnector != null)
             {
                 MatrixD c = dockConnector.WorldMatrix;
-                homeDock = new Waypoint(dockConnector.GetPosition(), gravity, SampleEfficiency(), (float)CurrentLift());
+                homeDock = new Waypoint(dockConnector.GetPosition(), gravity, (float)CurrentLift());
                 // The connector's forward is the direction it mates along. Approaching
                 // down that axis is the only way to dock reliably.
                 homeDockForward = c.Forward;
@@ -2999,7 +3133,7 @@ namespace VEIN
             else
             {
                 MatrixD m = controller.WorldMatrix;
-                homeDock = new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift());
+                homeDock = new Waypoint(shipPos, gravity, (float)CurrentLift());
                 homeDockForward = m.Forward;
                 homeDockUp = m.Up;
             }
@@ -3028,7 +3162,7 @@ namespace VEIN
             if (controller == null) return;
             if (!force && Vector3D.DistanceSquared(shipPos, lastRecordPos) < 1.0) return;
 
-            path.Add(new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift()));
+            path.Add(new Waypoint(shipPos, gravity, (float)CurrentLift()));
             lastRecordPos = shipPos;
         }
 
@@ -3037,34 +3171,6 @@ namespace VEIN
         {
             if (gravity.LengthSquared() < 1e-6) return 0;
             return ThrustAlong(-Vector3D.Normalize(gravity));
-        }
-
-        /// <summary>
-        /// Per-thruster-type effectiveness here. Purely diagnostic — it is what lets the
-        /// display say "atmospherics dead above this point" instead of just refusing to
-        /// fly with no explanation.
-        /// </summary>
-        float[] SampleEfficiency()
-        {
-            if (thrusterTypes.Count == 0) return new float[0];
-            float[] eff = new float[thrusterTypes.Count];
-
-            for (int i = 0; i < thrusterTypes.Count; i++)
-            {
-                string type = thrusterTypes[i];
-                float effective = 0, nominal = 0;
-
-                for (int t = 0; t < thrusters.Count; t++)
-                {
-                    IMyThrust th = thrusters[t];
-                    if (th.BlockDefinition.SubtypeId != type) continue;
-                    if (!th.IsFunctional) continue;
-                    effective += th.MaxEffectiveThrust;
-                    nominal += th.MaxThrust;
-                }
-                eff[i] = nominal > 0 ? effective / nominal : -1f;
-            }
-            return eff;
         }
 
         /// <summary>
@@ -3200,7 +3306,21 @@ namespace VEIN
             int fromEnd = outbound ? path.Count - 1 - pathIndex : pathIndex;
             if (fromEnd <= 1) speedLimit = Math.Min(speedLimit, 15.0);
 
-            FlyTo(aim, speedLimit);
+            // How much route is left beyond the aim point. pathCumulative already has
+            // this, so it costs one subtraction rather than a walk of the waypoint list.
+            double runOut = 0;
+            if (pathCumulative.Length == path.Count)
+            {
+                double remaining = outbound
+                    ? pathCumulative[path.Count - 1] - pathCumulative[pathIndex]
+                    : pathCumulative[pathIndex];
+                // Capped at two seconds of cruise. The route is a corridor and the ship
+                // still has to be able to take its corners; unbounded run-out would let
+                // it arrive at a bend far too fast to follow the path round it.
+                runOut = Math.Max(0.0, Math.Min(remaining, cruiseSpeed * 2.0));
+            }
+
+            FlyTo(aim, speedLimit, runOut);
 
             // Fly nose-first along the direction of travel: it keeps the drills pointing
             // where we are going, which is where a collision would come from.
@@ -3428,7 +3548,11 @@ namespace VEIN
             // Metres of rock to cut, not depth from the job plane. A resumed shaft needs
             // no special handling: the already-cut section returns no material, so
             // contact is simply detected again at the old bottom.
-            shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
+            // Solo only. With a dispatcher, OnLeaseGrant has already set this from the
+            // dispatcher's own probeDepth, which need not match ours — recomputing it
+            // here made the granted limit a dead field on the wire.
+            if (!HasDispatcher)
+                shaftDepthLimit = shaftIsProbe ? Math.Min(probeDepth, job.Depth) : job.Depth;
 
             SetState(MinerState.Approaching);
         }
@@ -3454,7 +3578,7 @@ namespace VEIN
             // One drone in the shared airspace at a time. Wait where we are, squared up
             // and at our lane height, rather than improvising a hold pattern: when the
             // lock arrives we want to already be pointing the right way.
-            if (!AcquireAirspace(LOCK_SITE))
+            if (!AcquireAirspace(AirspaceSection(activeCell)))
             {
                 statusLine = "Waiting for airspace";
                 if (lockHoldPoint == Vector3D.Zero) lockHoldPoint = shipPos;
@@ -3507,7 +3631,7 @@ namespace VEIN
         void SkipEmptyCell()
         {
             Log(CellLabel(activeCell) + " is open space — skipping");
-            RecordShaftResult(activeCell, ShaftResult.Completed, 0, 0, 0, shaftIsProbe);
+            RecordShaftResult(activeCell, ShaftResult.Completed, 0, 0, shaftIsProbe);
             if (activeCell >= 0 && activeCell < cells.Length)
                 cells[activeCell].State = CellState.Barren;
             ReleaseLeaseLocal();
@@ -3624,7 +3748,7 @@ namespace VEIN
 
             // Ask for the airspace on the way up rather than on arrival at the top, so
             // the queue is working while we climb and the common case costs nothing.
-            bool clear = AcquireAirspace(LOCK_SITE);
+            bool clear = AcquireAirspace(AirspaceSection(activeCell));
 
             // Climb the shaft axis exactly. Any lateral drift on the way up and the ship
             // wedges itself against the wall it just cut.
@@ -3673,7 +3797,7 @@ namespace VEIN
             if (shaftContactDepth < 0 && result == ShaftResult.Completed)
                 Log(CellLabel(activeCell) + " never reached rock");
 
-            RecordShaftResult(activeCell, result, ore, cut, cut, shaftIsProbe);
+            RecordShaftResult(activeCell, result, ore, cut, shaftIsProbe);
             ReleaseLeaseLocal();
 
             Log(CellLabel(activeCell) + " " + result + ": " + Fmt(ore, 0) + "kg / "
@@ -3796,11 +3920,32 @@ namespace VEIN
                 dockNearZone = false;
                 connectDebounce = 0;
                 dockStallTicks = 0;
+                dockBackoffTicks = 0;
                 lastDockDist = double.MaxValue;
             }
 
             if (dockConnector == null) { EnterFault("No connector to dock with"); return; }
             if (!homeDockSet) { EnterFault("No dock recorded"); return; }
+
+            // Wait our turn at the pad. Dock slots were being requested, granted and
+            // released, and then nothing ever consulted them — so on a shared connector
+            // two drones flew the same mating run at once. Bounded like the airspace
+            // wait, because a dispatcher that stops answering must not strand a ship
+            // holding station on its last few percent of hydrogen.
+            if (HasDispatcher && dockSlots > 0 && myDockSlot < 0)
+            {
+                if (dockWaitTick == 0) dockWaitTick = tick;
+                if (tick - dockWaitTick < (long)(lockPatience / Math.Max(dt, 0.01)))
+                {
+                    statusLine = "Waiting for a dock slot";
+                    if (tick % 60 == 0) RequestDock();
+                    Vector3D wait = homeDock.Position + homeDockForward * Math.Max(20.0, shipRadius * 5.0);
+                    FlyTo(wait, dockSpeed * 3.0);
+                    Orient(-homeDockForward, homeDockUp);
+                    return;
+                }
+            }
+            dockWaitTick = 0;
 
             if (Docked)
             {
@@ -3816,6 +3961,17 @@ namespace VEIN
             double standoff = Math.Max(6.0, shipRadius * 2.0);
 
             Vector3D hold = mate + axis * standoff;
+
+            // Serving a withdrawal ordered by a stalled mating run.
+            if (dockBackoffTicks > 0)
+            {
+                dockBackoffTicks--;
+                statusLine = "Docking — backing off";
+                Orient(-axis, homeDockUp);
+                FlyTo(hold + axis * standoff - (dockConnector.GetPosition() - shipPos), dockSpeed * 3.0);
+                return;
+            }
+
             Vector3D offAxis = shipPos - mate;
             double along = Vector3D.Dot(offAxis, axis);
             double lateral = (offAxis - axis * along).Length();
@@ -3883,7 +4039,14 @@ namespace VEIN
                 Log("Dock approach stalled at " + Fmt(mateDist, 1) + "m — backing off");
                 dockRetries++;
                 if (dockRetries >= 3) { EnterFault("Could not dock after 3 attempts"); return; }
-                SetState(MinerState.Inbound);
+                // Withdraw for real. Going to Inbound put the ship on a route it had
+                // already finished, so it arrived back at the connector within a tick or
+                // two and burned all three attempts in about ten seconds — from the same
+                // position, at the same angle, with the same result.
+                dockBackoffTicks = 60;
+                dockStallTicks = 0;
+                dockNearZone = false;
+                lastDockDist = double.MaxValue;
             }
         }
 
@@ -3900,6 +4063,10 @@ namespace VEIN
             }
 
             if (!Docked) { SetState(MinerState.Docking); return; }
+
+            // Twice a second is plenty: conveyors move on their own clock and the scan
+            // behind this walks the base's block list.
+            if (tick % 3 != 0) return;
 
             if (UnloadToBase()) SetState(MinerState.Servicing);
         }
@@ -4466,12 +4633,12 @@ namespace VEIN
         }
 
         void SendShaftReport(int cellIdx, ShaftResult result, double oreKg, double metres,
-                             double depthReached, bool wasProbe)
+                             bool wasProbe)
         {
             if (dispatcherAddr == 0) return;
             string body = "SR|" + cellIdx + "|" + (int)result
                         + "|" + EncD(oreKg) + "|" + EncD(metres)
-                        + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0);
+                        + "|" + (wasProbe ? 1 : 0);
             IGC.SendUnicastMessage(dispatcherAddr, igcChannel, body);
         }
 
@@ -4499,7 +4666,7 @@ namespace VEIN
         {
             if (activeCell < 0) return;
             if (dispatcherAddr != 0)
-                SendShaftReport(activeCell, why, ShaftOreSoFar(), shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
+                SendShaftReport(activeCell, why, ShaftOreSoFar(), shaftMaxDepth, shaftIsProbe);
             ReleaseLeaseLocal();
             activeCell = -1;
         }
@@ -4732,6 +4899,19 @@ namespace VEIN
             DroneRecord r = DroneFor(src);
             if (f.Length > 1 && r.Name == "?") r.Name = f[1];
 
+            // Already holding one? Re-grant it rather than allocate a second. A lease
+            // grant is a single unicast and IGC does not guarantee delivery, so a drone
+            // that missed one simply asks again — and used to be handed a different cell
+            // each time, leaking the site's shafts one dropped message at a time.
+            if (r.LeasedCell >= 0 && r.LeasedCell < cells.Length
+                && cells[r.LeasedCell].State == CellState.Leased
+                && cells[r.LeasedCell].LeasedBy == src)
+            {
+                cells[r.LeasedCell].LeaseExpiresTick = tick + LeaseTicks();
+                GrantLease(src, r.LeasedCell, job.Depth, false, r.Lane);
+                return;
+            }
+
             // Score the site from where this drone actually is, so the nearest free
             // shaft goes to the nearest drone instead of to whoever spoke first.
             int cell = SelectNextCell(r.Position.LengthSquared() > 1 ? r.Position : shipPos);
@@ -4784,7 +4964,7 @@ namespace VEIN
 
         void OnShaftReport(long src, string[] f)
         {
-            if (role != Role.Dispatcher || f.Length < 7) return;
+            if (role != Role.Dispatcher || f.Length < 6) return;
 
             int idx = ParseInt(f[1], -1);
             if (idx < 0 || idx >= cells.Length) return;
@@ -4795,7 +4975,7 @@ namespace VEIN
             if (cells[idx].LeasedBy != 0 && cells[idx].LeasedBy != src) return;
 
             ShaftResult result = (ShaftResult)ParseInt(f[2], 0);
-            RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
+            RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), f[5] == "1");
 
             DroneRecord r;
             if (fleet.TryGetValue(src, out r)) r.LeasedCell = -1;
@@ -5144,45 +5324,6 @@ namespace VEIN
             int v;
             return int.TryParse(s, out v) ? v : fallback;
         }
-
-        static double ParseDouble(string s, double fallback)
-        {
-            // Operator input, so it may genuinely contain a decimal point. Parse the
-            // two halves as integers and reassemble, which works whatever the locale
-            // thinks a separator is.
-            if (string.IsNullOrEmpty(s)) return fallback;
-
-            s = s.Trim();
-            bool negative = s.StartsWith("-");
-            if (negative || s.StartsWith("+")) s = s.Substring(1);
-
-            string wholeText = s, fracText = "";
-            int dot = s.IndexOfAny(new char[] { '.', ',' });
-            if (dot >= 0)
-            {
-                wholeText = s.Substring(0, dot);
-                fracText = s.Substring(dot + 1);
-            }
-
-            if (wholeText.Length == 0) wholeText = "0";
-
-            long whole;
-            if (!long.TryParse(wholeText, out whole)) return fallback;
-
-            double value = whole;
-            if (fracText.Length > 0)
-            {
-                long frac;
-                if (long.TryParse(fracText, out frac))
-                {
-                    double divisor = 1;
-                    for (int i = 0; i < fracText.Length; i++) divisor *= 10;
-                    value += frac / divisor;
-                }
-            }
-
-            return negative ? -value : value;
-        }
         #endregion
 
         #region 16_Display.cs
@@ -5303,6 +5444,13 @@ namespace VEIN
                   .Append("%/km, return needs ").Append(Fmt(FuelToGetHome() * 100, 0)).Append("%\n");
             }
 
+            // On an ion or atmospheric ship this is the only reserve that matters.
+            if (powerCalibrated && hydrogenTanks.Count == 0)
+            {
+                sb.Append("Power  drain ").Append(Fmt(powerPerMetre * 100000, 2))
+                  .Append("%/km, return needs ").Append(Fmt(PowerToGetHome() * 100, 0)).Append("%\n");
+            }
+
             sb.Append("Scout  ").Append(ScoutStatus()).Append('\n');
 
             // Anything the ship has decided for itself gets shown. An adaptive value you
@@ -5313,6 +5461,7 @@ namespace VEIN
             if (airspaceLock && HasDispatcher)
                 sb.Append("Air    ").Append(heldLock.Length > 0 ? "holding " + heldLock
                           : (wantLock.Length > 0 ? "queued for " + wantLock : "clear")).Append('\n');
+
 
             if (flightActive)
                 sb.Append("Nav    ").Append(Fmt(distToTarget, 1)).Append("m  ")
@@ -5364,8 +5513,10 @@ namespace VEIN
             if (!job.IsSet || cells.Length == 0) return;
             sb.Append('\n');
 
-            // Beyond this the map stops being readable on a normal LCD anyway.
-            if (job.Width > 64 || job.Height > 40)
+            // Beyond this the map stops being readable on a normal LCD anyway. Area as
+            // well as dimensions: 64x40 is inside both limits and still 2,600 characters
+            // of string building, every render, for something nobody can read.
+            if (job.Width > 64 || job.Height > 40 || cells.Length > 900)
             {
                 sb.Append("Map too large to draw (").Append(job.Width).Append('x')
                   .Append(job.Height).Append(")\n");
@@ -5728,6 +5879,16 @@ namespace VEIN
                  .Append('\n');
             }
 
+            // ---- Path --------------------------------------------------------------
+            for (int i = 0; i < path.Count; i++)
+            {
+                Waypoint w = path[i];
+                b.Append("P|").Append(EncV(w.Position))
+                 .Append('|').Append(EncV(w.Gravity))
+                 .Append('|').Append(EncD(w.Lift))
+                 .Append('\n');
+            }
+
             // ---- Yield map ---------------------------------------------------------
             b.Append("C");
             for (int i = 0; i < cells.Length; i++)
@@ -5743,20 +5904,9 @@ namespace VEIN
                  .Append(':').Append(st)
                  .Append(':').Append(EncD(c.OreKg))
                  .Append(':').Append(EncD(c.MetresDrilled))
-                 .Append(':').Append(EncD(c.DepthReached))
                  .Append(':').Append(c.StuckCount);
             }
             b.Append('\n');
-
-            // ---- Path --------------------------------------------------------------
-            for (int i = 0; i < path.Count; i++)
-            {
-                Waypoint w = path[i];
-                b.Append("P|").Append(EncV(w.Position))
-                 .Append('|').Append(EncV(w.Gravity))
-                 .Append('|').Append(EncD(w.Lift))
-                 .Append('\n');
-            }
 
             if (homeDockSet && homeDock != null)
             {
@@ -5820,12 +5970,12 @@ namespace VEIN
 
                         case "P":
                             if (!versionOk || f.Length < 4) break;
-                            path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), new float[0], (float)DecD(f[3])));
+                            path.Add(new Waypoint(DecV(f[1]), DecV(f[2]), (float)DecD(f[3])));
                             break;
 
                         case "D":
                             if (!versionOk || f.Length < 6) break;
-                            homeDock = new Waypoint(DecV(f[1]), DecV(f[4]), new float[0], (float)DecD(f[5]));
+                            homeDock = new Waypoint(DecV(f[1]), DecV(f[4]), (float)DecD(f[5]));
                             homeDockForward = DecV(f[2]);
                             homeDockUp = DecV(f[3]);
                             homeDockSet = true;
@@ -5864,7 +6014,13 @@ namespace VEIN
             stateEntry = true;
 
             if (saved != MinerState.Idle && saved != MinerState.Fault)
+            {
+                // And actually park. jobRunning was restored as true a few lines up, so
+                // StIdle relaunched on the very next tick — the ship flew off while the
+                // log said it was waiting to be told to continue.
+                jobRunning = false;
                 Log("Resumed from " + saved + " — idling, run 'start' to continue");
+            }
         }
 
         void LoadLearned(string[] f)
@@ -5903,7 +6059,7 @@ namespace VEIN
             for (int i = 1; i < f.Length; i++)
             {
                 string[] p = f[i].Split(':');
-                if (p.Length < 6) continue;
+                if (p.Length < 5) continue;
 
                 int idx = ParseInt(p[0], -1);
                 if (idx < 0 || idx >= cells.Length) continue;
@@ -5912,8 +6068,7 @@ namespace VEIN
                 c.State = (CellState)ParseInt(p[1], 0);
                 c.OreKg = (float)DecD(p[2]);
                 c.MetresDrilled = (float)DecD(p[3]);
-                c.DepthReached = (float)DecD(p[4]);
-                c.StuckCount = ParseInt(p[5], 0);
+                c.StuckCount = ParseInt(p[4], 0);
             }
         }
         #endregion
@@ -6378,6 +6533,12 @@ namespace VEIN
         double drillRateRefDepth;
         /// <summary>Consecutive ticks of clean cutting, i.e. keeping up with the command.</summary>
         int drillCleanTicks;
+        /// <summary>Tick of the last back-off, so they cannot compound faster than the
+        /// measurement they are based on.</summary>
+        long drillBackoffTick;
+        /// <summary>The configured derate we last seeded from, so an operator editing it
+        /// and reloading is not silently ignored once a sample has been taken.</summary>
+        double seededBrakeDerate = -1;
 
         /// <summary>The speed to actually descend at. One place, so the state machine
         /// never has to know whether adaptation is on.</summary>
@@ -6425,16 +6586,27 @@ namespace VEIN
             if (advance < 0 || dt <= 0) { drillCleanTicks = 0; return; }
 
             double rate = advance / dt;
-            drillRate = drillRate * 0.85 + rate * 0.15;
+            // Seed on first contact rather than filtering up from zero. Starting at zero
+            // meant the first second of every shaft looked like a total stall and cost
+            // three back-offs — 28% of the cutting speed — before the filter had caught
+            // up with a ship that was cutting perfectly well.
+            drillRate = drillRate > 0 ? drillRate * 0.85 + rate * 0.15 : rate;
 
             if (commanded < 0.05) return;
             double fraction = drillRate / commanded;
 
             if (fraction < 0.35)
             {
-                // Not cutting anything like as fast as we asked. Back off hard and start
-                // counting again from scratch.
-                learnedDrillSpeed = Math.Max(DrillSpeedFloor, learnedDrillSpeed * 0.85);
+                // Not cutting anything like as fast as we asked. Back off hard — but no
+                // more than once per second, because the filter feeding this decision has
+                // a time constant of about that. Compounding 0.85 every tick at 6 Hz
+                // drove the speed to its floor in under three seconds on evidence the
+                // measurement had not finished gathering.
+                if (tick - drillBackoffTick > 6)
+                {
+                    drillBackoffTick = tick;
+                    learnedDrillSpeed = Math.Max(DrillSpeedFloor, learnedDrillSpeed * 0.85);
+                }
                 drillCleanTicks = 0;
                 return;
             }
@@ -6581,15 +6753,37 @@ namespace VEIN
         //  already treats shaft ownership as a timed lease for exactly that reason, so
         //  the lock gets the same treatment. A lock is a loan with a deadline.
         //
-        //  Division of labour, now that all three mechanisms exist:
+        //  Sections are striped by row rather than one per site — see
+        //  LOCK_ROWS_PER_SECTION. Division of labour across all four mechanisms:
         //      lease  — who owns this work            (expires on silence)
         //      lock   — who may occupy this airspace  (expires on silence or timeout)
         //      lane   — what height you cruise at     (formation, not exclusion)
         //      slot   — which base connector is yours (released on undock)
         // ============================================================================
 
-        /// <summary>The one section VEIN uses: the shared airspace over the job.</summary>
-        const string LOCK_SITE = "site";
+        /// <summary>
+        /// Rows of cells per airspace section.
+        ///
+        /// SCAM uses a single shared section, and that is right for SCAM: its deposits
+        /// are a few shafts across, so two drones over the same rock genuinely do
+        /// conflict. VEIN sites run to 20x20 and further once the grid grows, and there
+        /// the far corners are a hundred metres apart — serialising them saturates at
+        /// three or four drones and the overflow behaviour is "go anyway", which makes a
+        /// fleet of five less safe than a fleet of two.
+        ///
+        /// Striping by row keeps exclusion where the conflict actually is. Four rows is
+        /// roughly ten metres of ground at a large-grid pitch, comfortably more than the
+        /// 12 m echelon both ancestors converged on, so two drones in adjacent stripes
+        /// are never in each other's way.
+        /// </summary>
+        const int LOCK_ROWS_PER_SECTION = 4;
+
+        /// <summary>Section name for the airspace above a cell.</summary>
+        string AirspaceSection(int cellIdx)
+        {
+            if (!airspaceLock || cellIdx < 0 || job.Width <= 0) return "site";
+            return "r" + (CellRow(cellIdx) / LOCK_ROWS_PER_SECTION);
+        }
 
         // ---- Miner side -----------------------------------------------------------
 
@@ -6619,6 +6813,11 @@ namespace VEIN
         {
             if (!airspaceLock || !HasDispatcher) return true;
             if (heldLock == section) return true;
+
+            // Holding a different one? Give it back before asking for this. Sections are
+            // per stripe now, so a drone crossing from one to the next would otherwise
+            // accumulate them and the queue behind the section it left would never run.
+            if (heldLock.Length > 0) ReleaseAirspace();
 
             if (wantLock != section)
             {
@@ -6694,6 +6893,16 @@ namespace VEIN
             {
                 if (heldLock.Length > 0) Log("Airspace '" + heldLock + "' revoked");
                 heldLock = "";
+                return;
+            }
+
+            // Only accept what we are actually waiting for. A grant can arrive after we
+            // gave up, after we moved on to a different section, or after we docked —
+            // and silently holding it then means the dispatcher believes a drone at base
+            // owns airspace over the site until the hold timeout expires.
+            if (f[1] != wantLock)
+            {
+                IGC.SendUnicastMessage(src, igcChannel, "KR|" + f[1]);
                 return;
             }
 
@@ -6809,6 +7018,9 @@ namespace VEIN
             if (lockOwner.Count == 0) return;
 
             long silence = (long)(droneTimeout / Math.Max(dt, 0.01));
+            // The ceiling has to outlast a legitimate hold, which is bounded by the
+            // holder's own watchdog. Reclaiming sooner takes the section off a drone
+            // that is still using it, which is worse than leaving it a little long.
             long hold = (long)(Math.Max(30.0, stateTimeout) / Math.Max(dt, 0.01));
 
             lockScratch.Clear();
@@ -6876,23 +7088,19 @@ namespace VEIN
             Log("Airspace released");
         }
 
-        /// <summary>Who holds what, for the dispatcher's screen.</summary>
+        /// <summary>How the sections are being used, for the dispatcher's screen.</summary>
         string AirspaceStatus()
         {
             if (!airspaceLock) return "off";
 
-            long owner = 0;
-            lockOwner.TryGetValue(LOCK_SITE, out owner);
+            int held = 0;
+            foreach (var kv in lockOwner) if (kv.Value != 0) held++;
 
             int waiting = 0;
-            List<long> q;
-            if (lockQueue.TryGetValue(LOCK_SITE, out q)) waiting = q.Count;
+            foreach (var kv in lockQueue) waiting += kv.Value.Count;
 
-            if (owner == 0) return waiting > 0 ? "free, " + waiting + " waiting" : "free";
-
-            DroneRecord r;
-            string name = fleet.TryGetValue(owner, out r) ? r.Name : "?";
-            return name + (waiting > 0 ? " (+" + waiting + " waiting)" : "");
+            if (held == 0 && waiting == 0) return "all clear";
+            return held + " stripe(s) held" + (waiting > 0 ? ", " + waiting + " waiting" : "");
         }
         #endregion
 

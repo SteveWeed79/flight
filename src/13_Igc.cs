@@ -98,12 +98,12 @@ void RequestLease()
 }
 
 void SendShaftReport(int cellIdx, ShaftResult result, double oreKg, double metres,
-                     double depthReached, bool wasProbe)
+                     bool wasProbe)
 {
     if (dispatcherAddr == 0) return;
     string body = "SR|" + cellIdx + "|" + (int)result
                 + "|" + EncD(oreKg) + "|" + EncD(metres)
-                + "|" + EncD(depthReached) + "|" + (wasProbe ? 1 : 0);
+                + "|" + (wasProbe ? 1 : 0);
     IGC.SendUnicastMessage(dispatcherAddr, igcChannel, body);
 }
 
@@ -131,7 +131,7 @@ void ReleaseLease(ShaftResult why)
 {
     if (activeCell < 0) return;
     if (dispatcherAddr != 0)
-        SendShaftReport(activeCell, why, ShaftOreSoFar(), shaftMaxDepth, shaftMaxDepth, shaftIsProbe);
+        SendShaftReport(activeCell, why, ShaftOreSoFar(), shaftMaxDepth, shaftIsProbe);
     ReleaseLeaseLocal();
     activeCell = -1;
 }
@@ -364,6 +364,19 @@ void OnLeaseRequest(long src, string[] f)
     DroneRecord r = DroneFor(src);
     if (f.Length > 1 && r.Name == "?") r.Name = f[1];
 
+    // Already holding one? Re-grant it rather than allocate a second. A lease
+    // grant is a single unicast and IGC does not guarantee delivery, so a drone
+    // that missed one simply asks again — and used to be handed a different cell
+    // each time, leaking the site's shafts one dropped message at a time.
+    if (r.LeasedCell >= 0 && r.LeasedCell < cells.Length
+        && cells[r.LeasedCell].State == CellState.Leased
+        && cells[r.LeasedCell].LeasedBy == src)
+    {
+        cells[r.LeasedCell].LeaseExpiresTick = tick + LeaseTicks();
+        GrantLease(src, r.LeasedCell, job.Depth, false, r.Lane);
+        return;
+    }
+
     // Score the site from where this drone actually is, so the nearest free
     // shaft goes to the nearest drone instead of to whoever spoke first.
     int cell = SelectNextCell(r.Position.LengthSquared() > 1 ? r.Position : shipPos);
@@ -416,7 +429,7 @@ void OnLeaseDenied(long src, string[] f)
 
 void OnShaftReport(long src, string[] f)
 {
-    if (role != Role.Dispatcher || f.Length < 7) return;
+    if (role != Role.Dispatcher || f.Length < 6) return;
 
     int idx = ParseInt(f[1], -1);
     if (idx < 0 || idx >= cells.Length) return;
@@ -427,7 +440,7 @@ void OnShaftReport(long src, string[] f)
     if (cells[idx].LeasedBy != 0 && cells[idx].LeasedBy != src) return;
 
     ShaftResult result = (ShaftResult)ParseInt(f[2], 0);
-    RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), DecD(f[5]), f[6] == "1");
+    RecordShaftResult(idx, result, DecD(f[3]), DecD(f[4]), f[5] == "1");
 
     DroneRecord r;
     if (fleet.TryGetValue(src, out r)) r.LeasedCell = -1;

@@ -24,15 +24,37 @@
 //  already treats shaft ownership as a timed lease for exactly that reason, so
 //  the lock gets the same treatment. A lock is a loan with a deadline.
 //
-//  Division of labour, now that all three mechanisms exist:
+//  Sections are striped by row rather than one per site — see
+//  LOCK_ROWS_PER_SECTION. Division of labour across all four mechanisms:
 //      lease  — who owns this work            (expires on silence)
 //      lock   — who may occupy this airspace  (expires on silence or timeout)
 //      lane   — what height you cruise at     (formation, not exclusion)
 //      slot   — which base connector is yours (released on undock)
 // ============================================================================
 
-/// <summary>The one section VEIN uses: the shared airspace over the job.</summary>
-const string LOCK_SITE = "site";
+/// <summary>
+/// Rows of cells per airspace section.
+///
+/// SCAM uses a single shared section, and that is right for SCAM: its deposits
+/// are a few shafts across, so two drones over the same rock genuinely do
+/// conflict. VEIN sites run to 20x20 and further once the grid grows, and there
+/// the far corners are a hundred metres apart — serialising them saturates at
+/// three or four drones and the overflow behaviour is "go anyway", which makes a
+/// fleet of five less safe than a fleet of two.
+///
+/// Striping by row keeps exclusion where the conflict actually is. Four rows is
+/// roughly ten metres of ground at a large-grid pitch, comfortably more than the
+/// 12 m echelon both ancestors converged on, so two drones in adjacent stripes
+/// are never in each other's way.
+/// </summary>
+const int LOCK_ROWS_PER_SECTION = 4;
+
+/// <summary>Section name for the airspace above a cell.</summary>
+string AirspaceSection(int cellIdx)
+{
+    if (!airspaceLock || cellIdx < 0 || job.Width <= 0) return "site";
+    return "r" + (CellRow(cellIdx) / LOCK_ROWS_PER_SECTION);
+}
 
 // ---- Miner side -----------------------------------------------------------
 
@@ -62,6 +84,11 @@ bool AcquireAirspace(string section)
 {
     if (!airspaceLock || !HasDispatcher) return true;
     if (heldLock == section) return true;
+
+    // Holding a different one? Give it back before asking for this. Sections are
+    // per stripe now, so a drone crossing from one to the next would otherwise
+    // accumulate them and the queue behind the section it left would never run.
+    if (heldLock.Length > 0) ReleaseAirspace();
 
     if (wantLock != section)
     {
@@ -137,6 +164,16 @@ void OnLockGrant(long src, string[] f)
     {
         if (heldLock.Length > 0) Log("Airspace '" + heldLock + "' revoked");
         heldLock = "";
+        return;
+    }
+
+    // Only accept what we are actually waiting for. A grant can arrive after we
+    // gave up, after we moved on to a different section, or after we docked —
+    // and silently holding it then means the dispatcher believes a drone at base
+    // owns airspace over the site until the hold timeout expires.
+    if (f[1] != wantLock)
+    {
+        IGC.SendUnicastMessage(src, igcChannel, "KR|" + f[1]);
         return;
     }
 
@@ -252,6 +289,9 @@ void ExpireAirspaceLocks()
     if (lockOwner.Count == 0) return;
 
     long silence = (long)(droneTimeout / Math.Max(dt, 0.01));
+    // The ceiling has to outlast a legitimate hold, which is bounded by the
+    // holder's own watchdog. Reclaiming sooner takes the section off a drone
+    // that is still using it, which is worse than leaving it a little long.
     long hold = (long)(Math.Max(30.0, stateTimeout) / Math.Max(dt, 0.01));
 
     lockScratch.Clear();
@@ -319,21 +359,17 @@ void PurgeAirspace()
     Log("Airspace released");
 }
 
-/// <summary>Who holds what, for the dispatcher's screen.</summary>
+/// <summary>How the sections are being used, for the dispatcher's screen.</summary>
 string AirspaceStatus()
 {
     if (!airspaceLock) return "off";
 
-    long owner = 0;
-    lockOwner.TryGetValue(LOCK_SITE, out owner);
+    int held = 0;
+    foreach (var kv in lockOwner) if (kv.Value != 0) held++;
 
     int waiting = 0;
-    List<long> q;
-    if (lockQueue.TryGetValue(LOCK_SITE, out q)) waiting = q.Count;
+    foreach (var kv in lockQueue) waiting += kv.Value.Count;
 
-    if (owner == 0) return waiting > 0 ? "free, " + waiting + " waiting" : "free";
-
-    DroneRecord r;
-    string name = fleet.TryGetValue(owner, out r) ? r.Name : "?";
-    return name + (waiting > 0 ? " (+" + waiting + " waiting)" : "");
+    if (held == 0 && waiting == 0) return "all clear";
+    return held + " stripe(s) held" + (waiting > 0 ? ", " + waiting + " waiting" : "");
 }

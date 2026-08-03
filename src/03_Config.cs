@@ -2,9 +2,11 @@
 //  CONFIGURATION
 //
 //  Everything lives in the Programmable Block's Custom Data as INI. Edit it,
-//  then run the "reload" argument (or just recompile). Unknown keys are left
-//  alone; missing keys are written back with their defaults, so the block always
-//  documents itself.
+//  then run the "reload" argument (or just recompile). Missing keys are written
+//  back with their defaults, so the block always documents itself.
+//
+//  Note that the write-back is a full rewrite: keys VEIN does not recognise are
+//  dropped, so Custom Data is not a place to keep your own notes.
 // ============================================================================
 
 // ---- Identity -------------------------------------------------------------
@@ -195,7 +197,17 @@ void LoadConfig()
     // reload to change an unrelated key must not throw away an hour of the ship
     // measuring itself. 'learn reset' is the way to deliberately start over.
     if (learnedDrillSpeed <= 0) learnedDrillSpeed = drillSpeed;
-    if (brakeSamples == 0) brakeDerate = configBrakeDerate;
+
+    // Re-seed when the operator has actually changed the figure, not only when
+    // nothing has been learned yet. Editing brakeDerate and running 'reload' did
+    // nothing at all once a single approach had been measured, which makes it
+    // look like a knob that is not wired up.
+    if (brakeSamples == 0 || configBrakeDerate != seededBrakeDerate)
+    {
+        brakeDerate = configBrakeDerate;
+        if (seededBrakeDerate >= 0 && configBrakeDerate != seededBrakeDerate) brakeSamples = 0;
+        seededBrakeDerate = configBrakeDerate;
+    }
 
     WriteConfig();
 }

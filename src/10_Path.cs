@@ -46,7 +46,7 @@ void CaptureHomeDock()
     if (dockConnector != null)
     {
         MatrixD c = dockConnector.WorldMatrix;
-        homeDock = new Waypoint(dockConnector.GetPosition(), gravity, SampleEfficiency(), (float)CurrentLift());
+        homeDock = new Waypoint(dockConnector.GetPosition(), gravity, (float)CurrentLift());
         // The connector's forward is the direction it mates along. Approaching
         // down that axis is the only way to dock reliably.
         homeDockForward = c.Forward;
@@ -55,7 +55,7 @@ void CaptureHomeDock()
     else
     {
         MatrixD m = controller.WorldMatrix;
-        homeDock = new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift());
+        homeDock = new Waypoint(shipPos, gravity, (float)CurrentLift());
         homeDockForward = m.Forward;
         homeDockUp = m.Up;
     }
@@ -84,7 +84,7 @@ void AddWaypoint(bool force)
     if (controller == null) return;
     if (!force && Vector3D.DistanceSquared(shipPos, lastRecordPos) < 1.0) return;
 
-    path.Add(new Waypoint(shipPos, gravity, SampleEfficiency(), (float)CurrentLift()));
+    path.Add(new Waypoint(shipPos, gravity, (float)CurrentLift()));
     lastRecordPos = shipPos;
 }
 
@@ -93,34 +93,6 @@ double CurrentLift()
 {
     if (gravity.LengthSquared() < 1e-6) return 0;
     return ThrustAlong(-Vector3D.Normalize(gravity));
-}
-
-/// <summary>
-/// Per-thruster-type effectiveness here. Purely diagnostic — it is what lets the
-/// display say "atmospherics dead above this point" instead of just refusing to
-/// fly with no explanation.
-/// </summary>
-float[] SampleEfficiency()
-{
-    if (thrusterTypes.Count == 0) return new float[0];
-    float[] eff = new float[thrusterTypes.Count];
-
-    for (int i = 0; i < thrusterTypes.Count; i++)
-    {
-        string type = thrusterTypes[i];
-        float effective = 0, nominal = 0;
-
-        for (int t = 0; t < thrusters.Count; t++)
-        {
-            IMyThrust th = thrusters[t];
-            if (th.BlockDefinition.SubtypeId != type) continue;
-            if (!th.IsFunctional) continue;
-            effective += th.MaxEffectiveThrust;
-            nominal += th.MaxThrust;
-        }
-        eff[i] = nominal > 0 ? effective / nominal : -1f;
-    }
-    return eff;
 }
 
 /// <summary>
@@ -256,7 +228,21 @@ bool FollowPath(bool outbound)
     int fromEnd = outbound ? path.Count - 1 - pathIndex : pathIndex;
     if (fromEnd <= 1) speedLimit = Math.Min(speedLimit, 15.0);
 
-    FlyTo(aim, speedLimit);
+    // How much route is left beyond the aim point. pathCumulative already has
+    // this, so it costs one subtraction rather than a walk of the waypoint list.
+    double runOut = 0;
+    if (pathCumulative.Length == path.Count)
+    {
+        double remaining = outbound
+            ? pathCumulative[path.Count - 1] - pathCumulative[pathIndex]
+            : pathCumulative[pathIndex];
+        // Capped at two seconds of cruise. The route is a corridor and the ship
+        // still has to be able to take its corners; unbounded run-out would let
+        // it arrive at a bend far too fast to follow the path round it.
+        runOut = Math.Max(0.0, Math.Min(remaining, cruiseSpeed * 2.0));
+    }
+
+    FlyTo(aim, speedLimit, runOut);
 
     // Fly nose-first along the direction of travel: it keeps the drills pointing
     // where we are going, which is where a collision would come from.

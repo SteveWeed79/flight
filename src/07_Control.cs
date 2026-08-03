@@ -20,10 +20,7 @@
 /// and marks anything above 0.80 as risky in its own UI, while SCAM ships a
 /// StoppingPowerQuotient of 0.50. Neither number is derived; both come from
 /// watching real ships overshoot. VEIN sat at 0.75 — more aggressive than
-/// either — purely because nothing had contradicted it yet. VEIN is already
-/// pessimistic in gravity, where it subtracts the full gravity magnitude from
-/// available deceleration, but in space that subtraction is zero and this is the
-/// only margin there is.
+/// either — purely because nothing had contradicted it yet.
 ///
 /// This is now only the *starting point*. The ship measures how much of its
 /// braking authority approaches genuinely demand and moves the figure to suit
@@ -42,8 +39,6 @@ void BuildThrustModel()
             else thrustBuckets[a, s].Clear();
         }
 
-    thrusterTypes.Clear();
-    thrustByType.Clear();
     if (controller == null) return;
 
     MatrixD inv = MatrixD.Transpose(controller.WorldMatrix.GetOrientation());
@@ -65,16 +60,8 @@ void BuildThrustModel()
         double component = axis == 0 ? push.X : (axis == 1 ? push.Y : push.Z);
         int sign = component >= 0 ? 0 : 1;
         thrustBuckets[axis, sign].Add(t);
-
-        string type = t.BlockDefinition.SubtypeId;
-        if (!thrustByType.ContainsKey(type))
-        {
-            thrustByType[type] = new float[3, 2];
-            thrusterTypes.Add(type);
-        }
     }
 
-    thrusterTypes.Sort();  // stable index space for waypoint efficiency arrays
     RefreshThrustCapacity();
 }
 
@@ -90,12 +77,6 @@ void RefreshThrustCapacity()
         for (int s = 0; s < 2; s++)
             thrustByAxis[a, s] = 0f;
 
-    foreach (var kv in thrustByType)
-    {
-        float[,] m = kv.Value;
-        for (int a = 0; a < 3; a++) for (int s = 0; s < 2; s++) m[a, s] = 0f;
-    }
-
     for (int a = 0; a < 3; a++)
         for (int s = 0; s < 2; s++)
         {
@@ -106,10 +87,6 @@ void RefreshThrustCapacity()
                 IMyThrust t = bucket[i];
                 if (!t.IsFunctional || !t.Enabled) continue;
                 thrustByAxis[a, s] += t.MaxEffectiveThrust;
-
-                float[,] typeMap;
-                if (thrustByType.TryGetValue(t.BlockDefinition.SubtypeId, out typeMap))
-                    typeMap[a, s] += t.MaxEffectiveThrust;
             }
         }
 }
@@ -142,9 +119,7 @@ double ThrustAlong(Vector3D worldDir)
 
 /// <summary>
 /// Deceleration we can actually achieve while travelling along
-/// <paramref name="dir"/>. Deliberately pessimistic — it assumes gravity is
-/// working against us in full, whatever direction we are pointing. Being
-/// conservative here costs a little speed and buys a lot of not-crashing.
+/// <paramref name="dir"/>.
 /// </summary>
 double StoppingAccel(Vector3D dir)
 {
@@ -168,6 +143,25 @@ double StoppingAccel(Vector3D dir)
 /// <summary>Fly toward a point, arriving with zero velocity.</summary>
 void FlyTo(Vector3D target, double maxSpeed)
 {
+    FlyTo(target, maxSpeed, 0.0);
+}
+
+/// <summary>
+/// Fly toward a point, with <paramref name="runOut"/> metres of usable travel
+/// beyond it before the ship actually has to be stopped.
+///
+/// Following a recorded route, the next waypoint is a corridor marker, not a
+/// destination. Braking for it pinned route speed at sqrt(2*a*spacing) — about
+/// 8 m/s on a 10 m recording interval — whatever cruiseSpeed was set to, and
+/// cruiseSpeed was therefore unreachable by construction.
+///
+/// The aim point deliberately stays near. Aiming at a point far down the route
+/// would let the ship cut the corner off the path a human flew to avoid a
+/// mountain, which is the whole reason the route exists. Only the *speed* looks
+/// further ahead.
+/// </summary>
+void FlyTo(Vector3D target, double maxSpeed, double runOut)
+{
     flightActive = true;
 
     if (controller == null) return;
@@ -179,14 +173,18 @@ void FlyTo(Vector3D target, double maxSpeed)
 
     // Speed we could still shed before arriving: v = sqrt(2 a d).
     double stopAccel = StoppingAccel(dir.LengthSquared() > 0 ? dir : Vector3D.Up);
-    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * Math.Max(0.0, distToTarget)) * BrakeDerateNow();
+    double brakeFrom = Math.Max(0.0, distToTarget + Math.Max(0.0, runOut));
+    double arrivalSpeed = Math.Sqrt(2.0 * stopAccel * brakeFrom) * BrakeDerateNow();
 
     double want = Math.Min(maxSpeed, arrivalSpeed);
 
     // Closing speed along the approach, not total speed: lateral drift is the
     // controller's problem, not the stopping distance's. Sampled here because
     // this is the one place that knows both the geometry and the capability.
-    UpdateBrakeLearning(arrivalSpeed < maxSpeed, distToTarget,
+    // Only a genuine arrival teaches anything. A fly-through has run-out and so
+    // is not arrival-limited, which is exactly the distinction the learner could
+    // not previously draw.
+    UpdateBrakeLearning(arrivalSpeed < maxSpeed && runOut <= 0.0, distToTarget,
                         Vector3D.Dot(shipVel, dir), stopAccel);
 
     // Do not travel fast while still swinging round. PAM does the same thing and
@@ -195,8 +193,10 @@ void FlyTo(Vector3D target, double maxSpeed)
     // sideways into whatever it is approaching. Full speed by 20 degrees.
     if (alignError > 20.0) want *= Math.Max(0.15, 1.0 - (alignError - 20.0) / 70.0);
 
-    // Never command more than the server will honour anyway.
-    want = Math.Min(want, 95.0);
+    // Never command more than the server will honour anyway. Vanilla tops out at
+    // 100 m/s; a speed mod raises it, and cruiseSpeed accepts up to 300, so an
+    // operator who has raised both should not be silently held at 95.
+    want = Math.Min(want, Math.Max(95.0, cruiseSpeed));
 
     SetVelocity(dir * want);
 }
@@ -221,14 +221,16 @@ void SetVelocity(Vector3D desiredVelWorld)
     const double TAU = 0.45;
     Vector3D desiredAccel = velError / TAU;
 
-    // Do not ask for more acceleration than we own.
-    double accelCap = ThrustAlong(desiredAccel) / Math.Max(1.0, shipMass);
-    if (accelCap > 0 && desiredAccel.Length() > accelCap)
-        desiredAccel = Vector3D.Normalize(desiredAccel) * accelCap;
+    // Hold station against gravity on top of whatever manoeuvre we wanted. The
+    // cap goes on the total, because the total is what the thrusters are asked
+    // for. Capping the manoeuvre alone and then adding gravity compensation on
+    // top let the sum saturate, and ApplyAxis clamps the sum — which quietly
+    // takes the shortfall out of holding the ship up.
+    Vector3D total = desiredAccel - gravity;
+    double cap = ThrustAlong(total) / Math.Max(1.0, shipMass);
+    if (cap > 0 && total.Length() > cap) total = Vector3D.Normalize(total) * cap;
 
-    // Hold station against gravity on top of whatever manoeuvre we wanted.
-    Vector3D force = (desiredAccel - gravity) * shipMass;
-    ApplyForce(force);
+    ApplyForce(total * shipMass);
 }
 
 /// <summary>Distribute a world-space force across the thruster buckets.</summary>
@@ -319,7 +321,7 @@ void Orient(Vector3D desiredForward, Vector3D desiredUp)
     // and the ship sits there perfectly still at maximum error until the
     // watchdog gives up. Nudge it off the singularity with any perpendicular
     // axis; one tick later the normal control has a gradient to work with.
-    if (errAxis.LengthSquared() < 1e-6 && alignError > 90.0)
+    if (errAxis.LengthSquared() < 1e-4 && alignError > 90.0)
     {
         Vector3D seed = Math.Abs(m.Forward.Z) < 0.9 ? Vector3D.Forward : Vector3D.Right;
         errAxis = Vector3D.Normalize(Vector3D.Cross(m.Forward, seed));

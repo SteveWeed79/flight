@@ -15,7 +15,9 @@ It is a linter, not a compiler. It will not catch a type error. It will catch
 the reason your script says "caught exception during load".
 
 Usage:  python3 tools/validate.py
-Exit code is non-zero if anything was reported.
+Exit code is non-zero if ANYTHING is reported, warnings included. A duplicate
+member and a call to a method nothing defines are both hard compile errors in
+game; reporting them and then exiting 0 made this useless in a build script.
 """
 
 import os
@@ -39,6 +41,11 @@ FORBIDDEN = [
     (r"\bTask\s*<", "System.Threading.Tasks is blocked"),
     (r"\bFile\s*\.(Read|Write|Open)", "file access is blocked"),
     (r"\bDateTime\s*\.\s*Now", "DateTime.Now is blocked; use Runtime.TimeSinceLastRun"),
+    # The locale hazard the whole codebase is built around: a client whose
+    # decimal separator is a comma turns "12.5" into "125" on a round trip.
+    (r'\.ToString\s*\(\s*"[FfNnGgEe]\d*"', 'culture-dependent ToString(format); use Fmt()'),
+    (r"\bdouble\s*\.\s*Parse\b", "double.Parse is culture-dependent; use DecD/ParseInt"),
+    (r"\bfloat\s*\.\s*Parse\b", "float.Parse is culture-dependent; use DecD/ParseInt"),
 ]
 
 # Bare-call names that are provided by the harness or the BCL rather than by us.
@@ -279,7 +286,7 @@ def main():
     if not problems and not warnings and not unknown:
         print("  clean")
 
-    return 1 if problems else 0
+    return 1 if (problems or warnings or unknown) else 0
 
 
 if __name__ == "__main__":

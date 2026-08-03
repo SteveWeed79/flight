@@ -208,7 +208,12 @@ mechanisms together is strictly better than either, and the absence of expiry is
 why SCAM needed a purge command in the first place.
 
 SCAM's protocol is taken as it stands — ask, grant, release, with a FIFO queue
-behind the section — and given the one thing it lacks. A lock now expires the
+behind the section — with one change and one addition. The change is granularity:
+SCAM uses a single section for the whole deposit, which is correct when the
+deposit is a few shafts across and wrong on a 20x20 site whose corners are a
+hundred metres apart, where it saturates at three or four drones. VEIN stripes
+the site into sections four cell-rows wide, so exclusion stays where the conflict
+actually is. The addition is the one thing SCAM lacks. A lock now expires the
 same way a lease does: on silence from its holder, and on a hard ceiling equal to
 the watchdog timeout, at which point the section is revoked and handed to the
 queue. The holder is *told* it has been revoked rather than left to find out.
