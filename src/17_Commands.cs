@@ -26,14 +26,18 @@ void HandleCommand(string argument, bool allowRelay = true)
         case "pause":
             jobRunning = false;
             Log("Stopped by operator");
-            if (state != MinerState.Fault && state != MinerState.Idle
-                && state != MinerState.Unloading && state != MinerState.Servicing)
-                SetState(MinerState.Inbound);
+            // Finish climbing out of the shaft first if there is one. Going
+            // straight home from the bottom of a hole means flying sideways
+            // through the wall.
+            ReturnToDock(ShaftResult.Aborted);
             break;
 
         case "halt":
-            // Immediate, in place. For when something is going wrong right now.
+            // Immediate, in place. For when something is going wrong right now,
+            // so it deliberately does not fly anywhere — which means it cannot
+            // climb out, and the cell has to be given back here instead.
             jobRunning = false;
+            ReleaseLease(ShaftResult.Aborted);
             SafeStop();
             SetState(MinerState.Idle);
             Log("Halted in place");
@@ -41,7 +45,7 @@ void HandleCommand(string argument, bool allowRelay = true)
 
         case "home":
             jobRunning = false;
-            SetState(MinerState.Inbound);
+            ReturnToDock(ShaftResult.Aborted);
             break;
 
         case "clear":

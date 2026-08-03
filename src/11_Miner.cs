@@ -52,7 +52,16 @@ void TickMiner()
 
 void StIdle(bool entry)
 {
-    if (entry) { SafeStop(); ReleaseAirspace(); statusLine = "Idle"; }
+    // Same catch-all as Inbound, for the paths that park in place rather than
+    // fly home. Safe on boot too: ReleaseLease only reports to a dispatcher, and
+    // at boot there is not one yet, so a restored activeCell is simply dropped.
+    if (entry)
+    {
+        SafeStop();
+        ReleaseAirspace();
+        if (activeCell >= 0) ReleaseLease(ShaftResult.Aborted);
+        statusLine = "Idle";
+    }
     if (!jobRunning || jobComplete) return;
 
     Health h = CheckReadiness();
@@ -459,6 +468,31 @@ void AbandonShaft(ShaftResult why)
     SetState(MinerState.Ascending);
 }
 
+/// <summary>
+/// Head for the dock from wherever we happen to be, safely.
+///
+/// The distinction this exists to enforce: never go straight to Inbound while a
+/// shaft is open. Inbound begins path following, and the first waypoint is above
+/// ground — so a ship forty metres down a hole it exactly fits gets told to fly
+/// sideways, into the wall it just cut. Ascending climbs the shaft axis, and
+/// FinishShaft then sends us Inbound on its own because jobRunning is false by
+/// the time it looks.
+///
+/// CheckDamage worked this out already and did it correctly on its own. The
+/// operator commands did not, which is worse, because "stop" is what a player
+/// types precisely when the ship is somewhere it should not be.
+/// </summary>
+void ReturnToDock(ShaftResult why)
+{
+    if (state == MinerState.Fault || state == MinerState.Idle) return;
+    // Already on the way home, or home. Nothing to do.
+    if (state == MinerState.Inbound || state == MinerState.Docking
+        || state == MinerState.Unloading || state == MinerState.Servicing) return;
+
+    if (activeCell >= 0) AbandonShaft(why);
+    else SetState(MinerState.Inbound);
+}
+
 // ---------------------------------------------------------------------------
 
 /// <summary>
@@ -496,6 +530,15 @@ void StInbound(bool entry)
     {
         statusLine = "Returning";
         SetDrills(false);
+
+        // Catch-all for every route into Inbound that skipped FinishShaft — the
+        // Approaching and Selecting watchdogs, mainly. Those still hold a cell,
+        // and on a solo miner nothing ever expires it: ExpireLeases only runs on
+        // a dispatcher. The cell would be lost for the rest of the job, and job
+        // growth — which refuses to renumber while anything is leased — would
+        // never fire again either.
+        if (activeCell >= 0) ReleaseLease(ShaftResult.Aborted);
+
         BeginPath(false);
         // Off the site and onto the recorded route, which everyone shares and
         // which the lanes exist to separate. Holding the site lock all the way
@@ -791,12 +834,7 @@ void CheckDamage()
     if (DamagedBlockCount() == 0) return;
 
     Log("Damage detected — returning");
-    if (state != MinerState.Inbound && state != MinerState.Docking
-        && state != MinerState.Unloading && state != MinerState.Servicing)
-    {
-        if (activeCell >= 0) AbandonShaft(ShaftResult.Aborted);
-        else SetState(MinerState.Inbound);
-    }
+    ReturnToDock(ShaftResult.Aborted);
 }
 
 string CellLabel(int idx)
